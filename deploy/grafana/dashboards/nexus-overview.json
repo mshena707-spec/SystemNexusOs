@@ -1,0 +1,44 @@
+{
+  "title": "Nexus OS — System Overview",
+  "uid": "nexus-overview",
+  "version": 1,
+  "refresh": "15s",
+  "panels": [
+    {
+      "id": 1, "title": "AI Providers Healthy", "type": "stat",
+      "gridPos": {"x": 0, "y": 0, "w": 4, "h": 4},
+      "targets": [{"expr": "nexus_ai_providers_healthy", "legendFormat": "Healthy"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"},
+        "thresholds": {"steps": [{"value": null, "color": "red"}, {"value": 3, "color": "yellow"}, {"value": 7, "color": "green"}]}}}
+    },
+    {
+      "id": 2, "title": "Events/min", "type": "stat",
+      "gridPos": {"x": 4, "y": 0, "w": 4, "h": 4},
+      "targets": [{"expr": "rate(nexus_events_total[1m]) * 60", "legendFormat": "Events/min"}]
+    },
+    {
+      "id": 3, "title": "Queue Completed", "type": "stat",
+      "gridPos": {"x": 8, "y": 0, "w": 4, "h": 4},
+      "targets": [{"expr": "nexus_queue_completed_total", "legendFormat": "Completed"}]
+    },
+    {
+      "id": 4, "title": "DLQ Size (alerts)", "type": "stat",
+      "gridPos": {"x": 12, "y": 0, "w": 4, "h": 4},
+      "targets": [{"expr": "nexus_dlq_size + nexus_queue_dlq_size", "legendFormat": "DLQ"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"},
+        "thresholds": {"steps": [{"value": null, "color": "green"}, {"value": 1, "color": "yellow"}, {"value": 10, "color": "red"}]}}}
+    },
+    {
+      "id": 5, "title": "Memory Usage", "type": "timeseries",
+      "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8},
+      "targets": [{"expr": "nexus_memory_heap_used_bytes / 1024 / 1024", "legendFormat": "Heap Used (MB)"}]
+    },
+    {
+      "id": 6, "title": "Audit Records", "type": "timeseries",
+      "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8},
+      "targets": [{"expr": "nexus_audit_records_total", "legendFormat": "Total Audit Records"}]
+    }
+  ],
+  "time": {"from": "now-1h", "to": "now"},
+  "timepicker": {}
+}

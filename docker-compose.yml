@@ -1,0 +1,220 @@
+# ╔══════════════════════════════════════════════════════════════════╗
+# ║  NEXUS OS — Docker Compose                                        ║
+# ║  Profiles: minimal | standard | full                              ║
+# ║                                                                   ║
+# ║  Usage:                                                           ║
+# ║    Minimal (SQLite, no Redis):                                    ║
+# ║      docker compose up -d nexus                                   ║
+# ║                                                                   ║
+# ║    Standard (Postgres + Redis):                                   ║
+# ║      docker compose --profile standard up -d                      ║
+# ║                                                                   ║
+# ║    Full (all services + Ollama):                                  ║
+# ║      docker compose --profile full up -d                          ║
+# ╚══════════════════════════════════════════════════════════════════╝
+
+services:
+
+  # ── Nexus OS App ─────────────────────────────────────────────────────
+  nexus:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - NODE_ENV=production
+    container_name: nexus-os
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - APP_URL=${APP_URL:-http://localhost:3000}
+      - SQLITE_PATH=/data/nexus.db
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - REDIS_URL=redis://redis:6379
+      - POSTGRES_URL=postgresql://nexus:${POSTGRES_PASSWORD:-nexus123}@postgres:5432/nexus
+    env_file:
+      - .env
+    volumes:
+      - nexus_data:/data
+      - nexus_logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - nexus-net
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ── Redis (queue + cache + rate limiting) ─────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: nexus-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - nexus-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "127.0.0.1:6379:6379"  # localhost only
+
+  # ── PostgreSQL (standard/full profiles) ──────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: nexus-postgres
+    restart: unless-stopped
+    profiles: ["standard", "full"]
+    environment:
+      POSTGRES_DB: nexus
+      POSTGRES_USER: nexus
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexus123}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - nexus-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexus"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "127.0.0.1:5432:5432"  # localhost only
+
+  # ── Ollama (Local LLM — full profile or GPU available) ───────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: nexus-ollama
+    restart: unless-stopped
+    profiles: ["full"]
+    volumes:
+      - ollama_models:/root/.ollama
+    networks:
+      - nexus-net
+    ports:
+      - "127.0.0.1:11434:11434"
+    # Uncomment for NVIDIA GPU support:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    environment:
+      - OLLAMA_KEEP_ALIVE=5m
+      - OLLAMA_MAX_LOADED_MODELS=2
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ── Prometheus (metrics) ─────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: nexus-prometheus
+    restart: unless-stopped
+    profiles: ["full"]
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - nexus-net
+    ports:
+      - "127.0.0.1:9090:9090"
+
+  # ── Grafana (dashboards) ─────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    container_name: nexus-grafana
+    restart: unless-stopped
+    profiles: ["full"]
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-nexus-grafana}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-clock-panel
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana:/etc/grafana/provisioning:ro
+    networks:
+      - nexus-net
+    ports:
+      - "127.0.0.1:3001:3000"
+    depends_on:
+      - prometheus
+
+  # ── Nginx Reverse Proxy ──────────────────────────────────────────
+  nginx:
+    image: nginx:alpine
+    container_name: nexus-nginx
+    restart: unless-stopped
+    profiles: ["standard", "full"]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - certbot_certs:/etc/letsencrypt:ro
+      - certbot_www:/var/www/certbot:ro
+    networks:
+      - nexus-net
+    depends_on:
+      - nexus
+
+  # ── Certbot (SSL certificates) ───────────────────────────────────
+  certbot:
+    image: certbot/certbot
+    container_name: nexus-certbot
+    profiles: ["full"]
+    volumes:
+      - certbot_certs:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+    command: certonly --webroot -w /var/www/certbot --email ${ADMIN_EMAIL:-admin@example.com} -d ${DOMAIN:-example.com} --agree-tos --non-interactive
+
+# ── Volumes ──────────────────────────────────────────────────────────
+volumes:
+  nexus_data:
+    driver: local
+  nexus_logs:
+    driver: local
+  redis_data:
+    driver: local
+  postgres_data:
+    driver: local
+  ollama_models:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  certbot_certs:
+    driver: local
+  certbot_www:
+    driver: local
+
+# ── Networks ─────────────────────────────────────────────────────────
+networks:
+  nexus-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

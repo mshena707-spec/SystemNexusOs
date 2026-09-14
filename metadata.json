@@ -1,0 +1,5 @@
+{
+  "name": "Nexus AI Business OS",
+  "description": "A multi-agent AI system for business automation, customer handling, security, and rider management.",
+  "requestFramePermissions": ["geolocation"]
+}

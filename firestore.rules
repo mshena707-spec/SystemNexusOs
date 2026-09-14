@@ -1,0 +1,376 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helper functions ──────────────────────────────────────────────────
+    function isAuth() {
+      return request.auth != null;
+    }
+    function isOwner(userId) {
+      return isAuth() && request.auth.uid == userId;
+    }
+    function getUserRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+    function isAdmin() {
+      return isAuth() && getUserRole() == 'admin';
+    }
+    function isCEO() {
+      return isAuth() && (getUserRole() == 'ceo' || getUserRole() == 'admin');
+    }
+    function isRider() {
+      return isAuth() && (getUserRole() == 'rider' || getUserRole() == 'admin');
+    }
+    function isRep() {
+      return isAuth() && (getUserRole() == 'rep' || getUserRole() == 'admin');
+    }
+
+    // ── Users ─────────────────────────────────────────────────────────────
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId);
+      // Only admin can change roles
+      allow update: if isOwner(userId) && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role'])
+                    || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ── User profiles ─────────────────────────────────────────────────────
+    match /user_profiles/{userId} {
+      allow read: if isOwner(userId) || isAdmin() || isRep();
+      allow write: if isOwner(userId);
+    }
+
+    // ── Products ──────────────────────────────────────────────────────────
+    match /products/{productId} {
+      allow read: if true; // Public
+      allow write: if isAdmin();
+    }
+
+    // ── Orders ────────────────────────────────────────────────────────────
+    match /orders/{orderId} {
+      allow read: if isAuth() && (
+        resource.data.userId == request.auth.uid ||
+        resource.data.riderId == request.auth.uid ||
+        isAdmin() || isRep()
+      );
+      allow create: if isAuth();
+      allow update: if isAuth() && (
+        resource.data.userId == request.auth.uid ||
+        resource.data.riderId == request.auth.uid ||
+        isAdmin() || isRider() || isRep()
+      );
+      allow delete: if isAdmin();
+    }
+
+    // ── Carts ─────────────────────────────────────────────────────────────
+    match /carts/{cartId} {
+      allow read, write: if isAuth() && resource.data.userId == request.auth.uid
+                          || isAdmin();
+    }
+
+    // ── Notifications ─────────────────────────────────────────────────────
+    match /notifications/{notifId} {
+      allow read: if isAuth() && (
+        resource.data.userId == request.auth.uid ||
+        resource.data.userId == 'admin' && isAdmin()
+      );
+      allow create: if isAdmin();  // Only server creates notifications
+      allow update: if isAuth() && resource.data.userId == request.auth.uid;
+      allow delete: if isAuth() && resource.data.userId == request.auth.uid || isAdmin();
+    }
+
+    // ── Memory entries ────────────────────────────────────────────────────
+    match /memory_entries/{entryId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // ── FCM tokens ────────────────────────────────────────────────────────
+    match /user_fcm_tokens/{userId} {
+      allow read: if isAdmin();
+      allow write: if isOwner(userId);
+    }
+
+    // ── Fraud flags ───────────────────────────────────────────────────────
+    match /fraud_flags/{flagId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // ── Analytics ────────────────────────────────────────────────────────
+    match /analytics/{docId} {
+      allow read: if isAdmin() || isCEO();
+      allow write: if isAdmin();
+    }
+
+    // ── Rider locations ───────────────────────────────────────────────────
+    match /rider_locations/{riderId} {
+      allow read: if isAdmin() || isRider();
+      allow write: if isAuth() && request.auth.uid == riderId || isAdmin();
+    }
+
+    // ── Vendor stores ─────────────────────────────────────────────────────
+    match /stores/{storeId} {
+      allow read: if true;
+      allow write: if isAdmin() ||
+        (isAuth() && getUserRole() == 'vendor' && resource.data.vendorId == request.auth.uid);
+    }
+
+    // ── Memory Engine (Phase 2) ───────────────────────────────────────────
+    match /memory_personal/{entryId} {
+      allow read: if isAuth() && (resource.data.ownerId == request.auth.uid || resource.data.agentId == request.auth.uid || isAdmin());
+      allow create: if isAuth();
+      allow update: if isAuth() && (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    match /memory_shared/{entryId} {
+      allow read: if isAuth();
+      allow write: if isAuth();
+      allow delete: if isAdmin();
+    }
+
+    match /memory_immutable/{entryId} {
+      allow read: if isAuth();
+      allow create: if isAuth();
+      allow update, delete: if false; // TRULY IMMUTABLE
+    }
+
+    match /memory_owner/{entryId} {
+      allow read, write: if isAdmin();
+      allow delete: if false;
+    }
+
+    match /memory_restricted/{entryId} {
+      allow read: if isAuth() && (
+        resource.data.allowedUserIds.hasAny([request.auth.uid]) ||
+        getUserRole() in resource.data.allowedRoles ||
+        isAdmin()
+      );
+      allow write: if isAdmin();
+    }
+
+    match /memory_episodic/{entryId} {
+      allow read: if isAuth() && (resource.data.ownerId == request.auth.uid || isAdmin() || isRep());
+      allow create, update: if isAuth() && (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    match /memory_semantic/{entryId} {
+      allow read: if isAuth();
+      allow write: if isAdmin();
+    }
+
+    match /memory_learning/{entryId} {
+      allow read: if isAdmin();
+      allow create: if isAuth();
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /_memory_health/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    // Phase A: Distributed shared state (replaces in-process sharedMemory)
+    match /shared_state/{key} {
+      allow read, write: if isAdmin();
+    }
+
+    // Phase A: Real GPS breadcrumb tracking
+    match /rider_breadcrumbs/{entryId} {
+      allow read: if isAdmin() || isRider();
+      allow create: if isRider();
+      allow delete: if isAdmin();
+    }
+
+    // Phase A: Payment records (written server-side)
+    match /payments/{orderId} {
+      allow read: if isAuth() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow write: if isAdmin();
+    }
+
+    // Phase B: Rider heartbeats
+    match /rider_heartbeats/{riderId} {
+      allow read: if isAdmin();
+      allow write: if isRider() && request.auth.uid == riderId;
+    }
+
+    // Phase B: Delivery timeline (immutable append-only)
+    match /delivery_timeline/{entryId} {
+      allow read: if isAuth() && (resource.data.riderId == request.auth.uid || isAdmin() || isRep());
+      allow create: if isAuth();
+      allow update, delete: if false;  // immutable
+    }
+
+    // Phase B: SLA alerts
+    match /sla_alerts/{alertId} {
+      allow read: if isAdmin() || isRep();
+      allow write: if isAdmin();
+    }
+
+    // Phase B: Rider performance cache
+    match /rider_performance/{docId} {
+      allow read: if isAdmin() || isRider();
+      allow write: if isAdmin();
+    }
+
+    // Phase B: Order batches
+    match /order_batches/{batchId} {
+      allow read: if isAdmin() || isRider();
+      allow write: if isAdmin();
+    }
+
+    // Phase B: Fleet snapshots (time-series)
+    match /fleet_snapshots/{docId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // Phase C: Semantic memory (LTM — AI answers stored for reuse)
+    match /memory_semantic/{entryId} {
+      allow read: if isAuth();
+      allow create: if isAuth();
+      allow update: if isAuth() && (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    // Phase C: Knowledge base (owner-curated facts, FAQs, product info)
+    match /knowledge_base/{entryId} {
+      allow read: if isAuth();
+      allow write: if isAdmin();
+    }
+
+    // Phase C: Conversation sessions (per-user, per-session history)
+    match /conversation_sessions/{sessionId} {
+      allow read: if isAuth() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow write: if isAuth() && (resource.data.userId == request.auth.uid || isAdmin());
+    }
+
+    // Phase C: Customer preferences
+    match /customer_preferences/{prefId} {
+      allow read: if isAuth() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow write: if isAuth() && (resource.data.userId == request.auth.uid || isAdmin());
+    }
+
+    // Phase C: Business learning events
+    match /business_learning/{docId} {
+      allow read: if isAdmin();
+      allow create: if isAuth();
+    }
+
+    // Phase C: Operational learning events
+    match /operational_learning/{docId} {
+      allow read: if isAdmin();
+      allow create: if isAuth();
+    }
+
+    // Phase F: Payment audit log (immutable, hash-chained)
+    match /payment_audit_log/{entryId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin();
+      allow update, delete: if false;  // immutable
+    }
+
+    // Phase F: Settlement batches
+    match /settlement_batches/{batchId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // Phase F: Reconciliation reports
+    match /reconciliation_reports/{reportId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin();
+      allow update, delete: if false;  // immutable
+    }
+
+    // Phase E: Migration reports (from MigrationTool)
+    match /migration_reports/{reportId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin();
+    }
+
+    // Phase G: Cross-channel customer identities
+    match /customer_identities/{customerId} {
+      allow read: if isAdmin() || isRep();
+      allow write: if isAdmin();
+    }
+
+    // Phase G: Persistent omnichannel message history
+    match /omni_messages/{messageId} {
+      allow read: if isAdmin() || isRep();
+      allow create: if isAuth();
+      allow update, delete: if false;  // append-only conversation log
+    }
+
+    // Phase M: JWT refresh-token sessions (server-managed only)
+    match /auth_sessions/{sessionId} {
+      allow read, write: if isAdmin();
+    }
+
+    // Phase M: Device fingerprint records per user
+    match /user_devices/{deviceId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // Phase M: Last-known login IP/time per user (impossible travel check)
+    match /user_last_login/{uid} {
+      allow read, write: if isAdmin();
+    }
+
+    // Phase M: Security events (anomalies, bot traffic, brute force, AI misuse)
+    match /security_events/{eventId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin();
+      allow update, delete: if false;  // append-only
+    }
+
+    // Phase K: Operating expenses (admin-entered, feeds Profit/Cash Flow engines)
+    match /expenses/{expenseId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // Phase H: System-wide control state (emergency shutdown flag).
+    // Read access intentionally broader than admin-only: shutdownGuard
+    // middleware and client-side health displays may need to check this
+    // without a full admin session in some deployment configurations —
+    // write is owner/admin only regardless.
+    match /system_control/{docId} {
+      allow read: if isAuth();
+      allow write: if isAdmin();
+    }
+
+    // Phase I: Campaign records
+    match /campaigns/{campaignId} {
+      allow read: if isAdmin() || isRep();
+      allow write: if isAdmin();
+    }
+
+    // Phase I: Campaign recipient lists (PII — admin only)
+    match /campaign_recipients/{campaignId} {
+      allow read, write: if isAdmin();
+    }
+
+    // Phase I: Campaign attribution measurements
+    match /campaign_attribution/{campaignId} {
+      allow read: if isAdmin() || isRep();
+      allow write: if isAdmin();
+    }
+
+    // Phase J: Supplier master data
+    match /suppliers/{supplierId} {
+      allow read: if isAdmin() || isRep();
+      allow write: if isAdmin();
+    }
+
+    // Phase J: Purchase orders (commit financial spend — admin only)
+    match /purchase_orders/{poId} {
+      allow read: if isAdmin() || isRep();
+      allow write: if isAdmin();
+    }
+  }
+}

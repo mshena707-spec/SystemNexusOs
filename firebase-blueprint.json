@@ -1,0 +1,334 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "A user of the application (customer or admin)",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "role": { "type": "string", "enum": ["customer", "admin"], "description": "User role" },
+        "createdAt": { "type": "timestamp" }
+      },
+      "required": ["uid", "email", "role", "createdAt"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "An item available in the marketplace",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "price": { "type": "number" },
+        "category": { "type": "string" },
+        "image": { "type": "string", "format": "uri" },
+        "modelUrl": { "type": "string", "format": "uri" },
+        "rating": { "type": "number" },
+        "variants": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "name": { "type": "string" },
+              "price": { "type": "number" },
+              "image": { "type": "string", "format": "uri" }
+            }
+          }
+        },
+        "createdAt": { "type": "timestamp" },
+        "updatedAt": { "type": "timestamp" }
+      },
+      "required": ["name", "price", "category", "createdAt"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "A customer's order",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "ID of the user who placed the order" },
+        "items": { 
+          "type": "array", 
+          "items": {
+            "type": "object",
+            "properties": {
+              "productId": { "type": "string" },
+              "quantity": { "type": "number" },
+              "price": { "type": "number" }
+            }
+          }
+        },
+        "totalAmount": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "processing", "shipped", "delivered", "cancelled", "paid"] },
+        "paymentMethod": { "type": "string" },
+        "paymentDetails": { "type": "object" },
+        "createdAt": { "type": "timestamp" }
+      },
+      "required": ["userId", "items", "totalAmount", "status", "createdAt"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "A chat message between a user and an AI agent",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "role": { "type": "string", "enum": ["user", "assistant", "system"] },
+        "content": { "type": "string" },
+        "agent": { "type": "string", "enum": ["customer", "security", "rider", "cto"] },
+        "timestamp": { "type": "timestamp" }
+      },
+      "required": ["userId", "role", "content", "timestamp"]
+    },
+    "Approval": {
+      "title": "Approval",
+      "description": "An API approval request for the admin",
+      "type": "object",
+      "properties": {
+        "agent": { "type": "string" },
+        "reason": { "type": "string" },
+        "estimatedCost": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "requestedAt": { "type": "timestamp" },
+        "resolvedAt": { "type": "timestamp" }
+      },
+      "required": ["agent", "reason", "estimatedCost", "status", "requestedAt"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "A log of significant administrative actions",
+      "type": "object",
+      "properties": {
+        "action": { "type": "string" },
+        "userId": { "type": "string" },
+        "details": { "type": "string" },
+        "timestamp": { "type": "timestamp" }
+      },
+      "required": ["action", "userId", "details", "timestamp"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "A notification for a user",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "type": { "type": "string" },
+        "read": { "type": "boolean" },
+        "timestamp": { "type": "timestamp" }
+      },
+      "required": ["userId", "title", "message", "type", "read", "timestamp"]
+    },
+    "ErrorLog": {
+      "title": "Error Log",
+      "description": "Application error logs",
+      "type": "object",
+      "properties": {
+        "errorMessage": { "type": "string" },
+        "stackTrace": { "type": "string" },
+        "componentStack": { "type": "string" },
+        "userId": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "timestamp": { "type": "timestamp" },
+        "url": { "type": "string" },
+        "userAgent": { "type": "string" }
+      },
+      "required": ["errorMessage", "timestamp"]
+    },
+    "ScheduledTask": {
+      "title": "Scheduled Task",
+      "description": "AI agent scheduled tasks",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "agent": { "type": "string" },
+        "trigger": { "type": "string" },
+        "parameters": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "timestamp" }
+      },
+      "required": ["name", "agent", "trigger", "parameters", "status", "createdAt"]
+    },
+    "Rider": {
+      "title": "Rider",
+      "description": "A delivery rider's live status and location",
+      "type": "object",
+      "properties": {
+        "rider": { "type": "string" },
+        "status": { "type": "string", "enum": ["Available", "Delivering", "Offline"] },
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "time": { "type": "string" },
+        "orderDetails": { "type": "string" },
+        "updatedAt": { "type": "timestamp" }
+      },
+      "required": ["rider", "status", "x", "y", "updatedAt"]
+    },
+    "LogisticsBatch": {
+      "title": "Logistics Batch",
+      "description": "A batch of products being moved or tracked",
+      "type": "object",
+      "properties": {
+        "batchId": { "type": "string" },
+        "products": { "type": "array" },
+        "status": { "type": "string", "enum": ["in_transit", "delivered", "lost", "damaged", "returned"] },
+        "vehicleType": { "type": "string" },
+        "driverId": { "type": "string" },
+        "currentDistrict": { "type": "string" },
+        "contextOptions": {
+          "type": "object",
+          "properties": {
+            "weather": { "type": "string" },
+            "emergency": { "type": "boolean" },
+            "specialAnnouncement": { "type": "string" }
+          }
+        },
+        "updatedAt": { "type": "timestamp" },
+        "createdAt": { "type": "timestamp" }
+      },
+      "required": ["batchId", "status", "vehicleType", "driverId", "currentDistrict", "updatedAt"]
+    },
+    "LogisticsHandoff": {
+      "title": "Logistics Handoff",
+      "description": "Record of a QR scan handoff",
+      "type": "object",
+      "properties": {
+        "batchId": { "type": "string" },
+        "fromDriverId": { "type": "string" },
+        "toDriverId": { "type": "string" },
+        "location": { "type": "string" },
+        "status": { "type": "string" },
+        "notes": { "type": "string" },
+        "timestamp": { "type": "timestamp" }
+      },
+      "required": ["batchId", "toDriverId", "status", "timestamp"]
+    },
+    "AnomalyReport": {
+      "title": "Anomaly Report",
+      "description": "Tracks issues like damages, warranty claims, refunds",
+      "type": "object",
+      "properties": {
+        "itemId": { "type": "string" },
+        "type": { "type": "string" },
+        "reportedBy": { "type": "string" },
+        "description": { "type": "string" },
+        "priceFluctuation": { "type": "number" },
+        "status": { "type": "string" },
+        "timestamp": { "type": "timestamp" }
+      },
+      "required": ["itemId", "type", "reportedBy", "status", "timestamp"]
+    },
+    "Settings": {
+      "title": "Settings",
+      "description": "System settings and feature flags",
+      "type": "object",
+      "properties": {
+        "features": {
+          "type": "object",
+          "properties": {
+            "logistics_tracking": { "type": "boolean" },
+            "anomaly_reports": { "type": "boolean" },
+            "offline_mode": { "type": "boolean" }
+          }
+        },
+        "updatedAt": { "type": "timestamp" }
+      },
+      "required": ["features", "updatedAt"]
+    },
+    "Trace": {
+      "title": "Trace",
+      "description": "Telemetry and agent spans",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "userId": { "type": "string" },
+        "agentRole": { "type": "string" },
+        "startTime": { "type": "number" },
+        "endTime": { "type": "number" },
+        "status": { "type": "string" },
+        "spans": { "type": "array" }
+      },
+      "required": ["id", "name", "userId", "agentRole", "startTime", "status", "spans"]
+    },
+    "UserPreference": {
+      "title": "User Preference",
+      "description": "Persisted learned user preference and behaviors",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "traits": { "type": "array" },
+        "insights": { "type": "array" },
+        "lastUpdated": { "type": "string" }
+      },
+      "required": ["userId", "traits", "insights", "lastUpdated"]
+    }
+  },
+  "firestore": {
+    "settings/{settingId}": {
+      "schema": { "$ref": "#/entities/Settings" },
+      "description": "System settings and feature flags"
+    },
+    "traces/{traceId}": {
+      "schema": { "$ref": "#/entities/Trace" },
+      "description": "Collection of telemetry traces"
+    },
+    "user_preferences/{userId}": {
+      "schema": { "$ref": "#/entities/UserPreference" },
+      "description": "Collection of user preferences extracted by AI"
+    },
+    "users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Collection of users"
+    },
+    "products/{productId}": {
+      "schema": { "$ref": "#/entities/Product" },
+      "description": "Collection of products"
+    },
+    "orders/{orderId}": {
+      "schema": { "$ref": "#/entities/Order" },
+      "description": "Collection of orders"
+    },
+    "messages/{messageId}": {
+      "schema": { "$ref": "#/entities/Message" },
+      "description": "Collection of chat messages"
+    },
+    "approvals/{approvalId}": {
+      "schema": { "$ref": "#/entities/Approval" },
+      "description": "Collection of API approval requests"
+    },
+    "audit_logs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Collection of audit logs"
+    },
+    "notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/Notification" },
+      "description": "Collection of user notifications"
+    },
+    "error_logs/{logId}": {
+      "schema": { "$ref": "#/entities/ErrorLog" },
+      "description": "Collection of application errors"
+    },
+    "scheduled_tasks/{taskId}": {
+      "schema": { "$ref": "#/entities/ScheduledTask" },
+      "description": "Collection of scheduled tasks"
+    },
+    "riders/{riderId}": {
+      "schema": { "$ref": "#/entities/Rider" },
+      "description": "Collection of rider statuses and locations"
+    },
+    "logistics_batches/{batchId}": {
+      "schema": { "$ref": "#/entities/LogisticsBatch" },
+      "description": "Collection of logistics batches"
+    },
+    "logistics_handoffs/{handoffId}": {
+      "schema": { "$ref": "#/entities/LogisticsHandoff" },
+      "description": "Collection of logistics handoffs"
+    },
+    "anomaly_reports/{reportId}": {
+      "schema": { "$ref": "#/entities/AnomalyReport" },
+      "description": "Collection of anomaly reports"
+    }
+  }
+}

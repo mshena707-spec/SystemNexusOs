@@ -1,0 +1,89 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,600;1,600&display=swap');
+@import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Playfair Display", ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+
+  /* ── Brand & Nexus Command semantic tokens ──────────────────────────────
+   * NOT a hardcoded brand identity — every value below is a DEFAULT that
+   * ThemeProvider overwrites at runtime (via inline CSS custom properties
+   * on <html>) once an owner picks their own brand colors in Settings ▸
+   * Brand & Appearance. See src/lib/theme/colorEngine.ts for how a full
+   * palette gets derived from just 1-2 picked colors, and
+   * src/contexts/ThemeContext.tsx for how it gets applied live.
+   *
+   * Names are role-based (primary/secondary/surface/text/status), never
+   * color-based (no "saffron", no "blue") — a business with entirely
+   * different brand colors gets the exact same token names. */
+  --color-nexus-primary:          #E67E22;
+  --color-nexus-primary-hover:    #EF9143;
+  --color-nexus-primary-active:   #C96A16;
+  --color-nexus-primary-muted:    #3A2E20;
+  --color-nexus-primary-text:     #141110;
+  --color-nexus-secondary:        #4A9257;
+  --color-nexus-secondary-hover:  #5FA96C;
+  --color-nexus-secondary-text:   #FBFAF8;
+
+  --color-nexus-void:            #17140F;
+  --color-nexus-surface:         #201C16;
+  --color-nexus-surface-raised:  #2A251D;
+  --color-nexus-border:          #362F25;
+  --color-nexus-border-strong:   #4A4032;
+  --color-nexus-text:            #F4F1EA;
+  --color-nexus-text-muted:      #A89A85;
+  --color-nexus-text-faint:      #6B6152;
+
+  --color-nexus-success: #5FA06A;
+  --color-nexus-danger:  #D1583A;
+  --color-nexus-warning: #D4A72C;
+  --color-nexus-info:    #3F8FA0;
+
+  /* ── Storefront (light mode) — legacy names, aliased to the semantic
+   * tokens above so this existing code needs zero further changes. */
+  --color-pearl: #F4F5F0;
+  --color-basil: var(--color-nexus-secondary);
+  --color-saffron: var(--color-nexus-primary);
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--color-pearl);
+  color: #1a1a1a;
+  scroll-behavior: smooth;
+  overflow-x: hidden;
+}
+
+/* Custom Scrollbar for a polished look */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+/* Smart Transitions for Text and Elements */
+.smart-transition {
+  transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.text-transition-color {
+  transition: color 0.5s ease-in-out;
+}

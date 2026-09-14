@@ -1,0 +1,18 @@
+{
+  "default": "deny",
+  "actions": {
+    "read": "allow",
+    "update": "require_confirmation",
+    "send": "require_confirmation",
+    "delete": "block",
+    "system_override": "block"
+  },
+  "roles": {
+    "admin": ["*"],
+    "owner": ["*"],
+    "user": ["read", "update", "send"],
+    "customer": ["read", "update", "send"],
+    "rider": ["read", "update"],
+    "anonymous": ["read"]
+  }
+}
