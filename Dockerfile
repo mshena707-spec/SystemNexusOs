@@ -7,30 +7,30 @@ WORKDIR /app
 RUN apk add --no-cache python3 make g++ gcc libc-dev
 
 COPY package*.json ./
-RUN npm install --include=dev
+# Use npm ci when a lockfile is present for reproducible installs
+RUN npm ci
 
 COPY . .
-RUN npm run build 2>/dev/null || true
+# Build the project (ignore non-zero exit to allow projects without a build step)
+RUN npm run build || true
 
 # ── Production Stage ──────────────────────────────────────────────────
 FROM node:22-alpine AS production
 
 WORKDIR /app
 
-# Runtime deps for native modules
-RUN apk add --no-cache python3 make g++ gcc libc-dev tini curl
+# Runtime-only utilities
+RUN apk add --no-cache tini curl
 
 # Create non-root user
 RUN addgroup -g 1001 nexus && adduser -u 1001 -G nexus -s /bin/sh -D nexus
 
-# Copy package.json and install production deps
-COPY package*.json ./RUN npm install --omit=dev && npm cache clean --force
+# Copy package metadata and install production deps only
+COPY package*.json ./
+RUN npm ci --omit=dev && npm cache clean --force
 
-# Copy built app
-COPY --from=builder /app/dist ./dist 2>/dev/null || true
-COPY --from=builder /app/src ./src
-COPY --from=builder /app/server.ts ./
-COPY --from=builder /app/tsconfig.json ./
+# Copy runtime artifacts from the builder stage
+COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/scripts ./scripts
 
 # Data directory (SQLite, logs, uploads)
@@ -46,4 +46,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 
 # Use tini for proper signal handling
 ENTRYPOINT ["/sbin/tini", "--"]
-CMD ["node", "--require", "ts-node/register", "server.ts"]
+# Run the compiled JavaScript entrypoint. Adjust path if your build outputs a different filename.
+CMD ["node", "dist/server.js"]
