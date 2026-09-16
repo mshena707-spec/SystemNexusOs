@@ -7,7 +7,7 @@ WORKDIR /app
 RUN apk add --no-cache python3 make g++ gcc libc-dev
 
 COPY package*.json ./
-RUN npm ci --include=dev
+RUN npm install --include=dev
 
 COPY . .
 RUN npm run build 2>/dev/null || true
@@ -24,8 +24,7 @@ RUN apk add --no-cache python3 make g++ gcc libc-dev tini curl
 RUN addgroup -g 1001 nexus && adduser -u 1001 -G nexus -s /bin/sh -D nexus
 
 # Copy package.json and install production deps
-COPY package*.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+COPY package*.json ./RUN npm install --omit=dev && npm cache clean --force
 
 # Copy built app
 COPY --from=builder /app/dist ./dist 2>/dev/null || true
