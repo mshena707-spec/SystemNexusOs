@@ -7,8 +7,8 @@ WORKDIR /app
 RUN apk add --no-cache python3 make g++ gcc libc-dev
 
 COPY package*.json ./
-# Use npm ci when a lockfile is present for reproducible installs
-RUN npm ci
+# Install dependencies: use npm ci when package-lock.json exists, otherwise fall back to npm install
+RUN if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --prefer-offline; fi
 
 COPY . .
 # Build the project (ignore non-zero exit to allow projects without a build step)
@@ -27,7 +27,7 @@ RUN addgroup -g 1001 nexus && adduser -u 1001 -G nexus -s /bin/sh -D nexus
 
 # Copy package metadata and install production deps only
 COPY package*.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+RUN if [ -f package-lock.json ]; then npm ci --omit=dev && npm cache clean --force; else npm install --omit=dev --no-audit --prefer-offline && npm cache clean --force; fi
 
 # Copy runtime artifacts from the builder stage
 COPY --from=builder /app/dist ./dist
