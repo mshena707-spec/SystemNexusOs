@@ -28,8 +28,8 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import { QRCodeSVG } from "qrcode.react";
 import { Link, useParams } from "react-router-dom";
-import Product3DViewer from "../components/Product3DViewer";
 import { useAuth } from "../contexts/AuthContext";
+import Product3DViewer from "../components/Product3DViewer";
 import {
   collection,
   getDocs,
@@ -868,7 +868,6 @@ CRITICAL RULE: NEVER identify yourself as an AI, bot, or automated system. You a
     try {
       const { OrderEngine } = await import('../lib/business/OrderEngine');
       const { PaymentEngine } = await import('../lib/business/PaymentEngine');
-      const { NotificationEngine } = await import('../lib/integrations/NotificationEngine');
       
       const orderId = 'ORD-' + Date.now().toString() + Math.random().toString(36).substring(2, 6).toUpperCase();
 
@@ -916,8 +915,12 @@ CRITICAL RULE: NEVER identify yourself as an AI, bot, or automated system. You a
       setCart([]);
       setIsCheckoutModalOpen(false);
       
-      // Notification Trigger
-      NotificationEngine.notifyOrderPaid(orderId, user!.uid).catch(console.error);
+      // Notification for this order is sent server-side once payment is
+      // confirmed (see EventBus.on('order.paid') in server.ts). A direct
+      // client-side call to NotificationEngine used to sit here, but it
+      // pulls in the Firebase Admin SDK — a server-only package that
+      // ships a file the browser build cannot bundle — which broke
+      // production builds. Removed; nothing else depended on it.
 
       // Show Success Modal
       setSuccessModalData({
