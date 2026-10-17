@@ -1,0 +1,130 @@
+# NexusOS আপডেট — এই ফাইলটা একবারই বানাতে হয়।
+# এরপর "nexus-update/layer-N.b64" নামে আপডেট-ফাইল repo-তে যোগ করলেই আপডেট নিজে নিজে বসে যায়।
+name: NexusOS আপডেট বসান
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "nexus-update/layer-*.b64"
+  workflow_dispatch:
+    inputs:
+      code:
+        description: "যাচাই কোড (ঐচ্ছিক — Claude যে ১২ অক্ষরের কোড দিয়েছে)"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nexus-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: আপডেট যাচাই ও প্রয়োগ
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: কোড নামানো
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: আপডেট যাচাই ও বসানো
+        env:
+          CODE: ${{ github.event.inputs.code }}
+        run: |
+          set -euo pipefail
+          fail() {
+            echo "::error::$*"
+            { echo "### ❌ আপডেট বসেনি"; echo; echo "$*"; } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          }
+
+          CODE="$(printf '%s' "${CODE:-}" | tr -d '[:space:]' | tr 'A-F' 'a-f')"
+          if [ -n "$CODE" ] && ! [[ "$CODE" =~ ^[0-9a-f]{12}$ ]]; then
+            fail "কোড ঠিক ১২টি অক্ষর (0-9 ও a-f) হতে হবে। আপনি লিখেছেন: $CODE"
+          fi
+
+          shopt -s nullglob
+          files=(nexus-update/layer-*.b64)
+          [ "${#files[@]}" -gt 0 ] || fail "nexus-update ফোল্ডারে কোনো layer-N.b64 ফাইল নেই। আগে সেই ফাইলটা repo-তে যোগ করুন।"
+
+          APPLIED=0
+          if [ -f .nexus-update/APPLIED ]; then APPLIED="$(tr -dc '0-9' < .nexus-update/APPLIED)"; fi
+          APPLIED="${APPLIED:-0}"
+
+          WORK="$(mktemp -d)"
+          LAST="$APPLIED"
+          LASTSHA=""
+          mapfile -t ordered < <(for f in "${files[@]}"; do n="${f##*/layer-}"; n="${n%.b64}"; printf '%s %s\n' "$n" "$f"; done | sort -n | cut -d' ' -f2)
+
+          echo "এখন পর্যন্ত বসানো layer: $APPLIED"
+          for f in "${ordered[@]}"; do
+            n="${f##*/layer-}"; n="${n%.b64}"
+            [[ "$n" =~ ^[0-9]+$ ]] || fail "ফাইলের নাম ঠিক নেই: $f (layer-1.b64 ধরনের হতে হবে)"
+            head -n1 "$f" | grep -q '^#NEXUS ' || fail "$f: প্রথম লাইনটা ঠিক নেই — ফাইলটা পুরোটা কপি হয়নি। আবার পুরোটা কপি করে বানান।"
+            grep -q '^#END' "$f" || fail "$f: শেষ লাইন (#END) নেই — কপি অসম্পূর্ণ। আবার পুরোটা কপি করুন।"
+            want="$(head -n1 "$f" | sed -nE 's/.*sha256=([0-9a-f]{64}).*/\1/p')"
+            [ -n "$want" ] || fail "$f: প্রথম লাইনে যাচাই-সংখ্যা (sha256) নেই।"
+            grep -v '^#' "$f" | tr -d ' \r\n\t' | base64 -d > "$WORK/layer-$n.gz" 2> "$WORK/b64.err" || fail "$f: ভিতরের লেখা ভাঙা। আবার পুরোটা কপি করুন।"
+            got="$(sha256sum "$WORK/layer-$n.gz" | cut -d' ' -f1)"
+            [ "$got" = "$want" ] || fail "$f: ফাইলটা পুরো/ঠিকভাবে কপি হয়নি (যাচাই মেলেনি)। আবার কপি করে বানান।"
+            LASTSHA="$got"
+            echo "layer $n: যাচাই ঠিক আছে (${got:0:12})"
+          done
+
+          if [ -n "$CODE" ] && [ "${LASTSHA:0:12}" != "$CODE" ]; then
+            fail "দেওয়া কোড ($CODE) ফাইলের কোডের (${LASTSHA:0:12}) সাথে মেলেনি। ভুল বা পুরনো ফাইল হতে পারে।"
+          fi
+
+          for f in "${ordered[@]}"; do
+            n="${f##*/layer-}"; n="${n%.b64}"
+            if [ "$n" -le "$APPLIED" ]; then echo "layer $n আগেই বসানো আছে — বাদ দিলাম"; continue; fi
+            gunzip -c "$WORK/layer-$n.gz" > "$WORK/layer-$n.patch" || fail "layer $n খোলা যায়নি।"
+            if git apply --numstat "$WORK/layer-$n.patch" | cut -f3 | grep -Eq '^(\.github/|nexus-update/|\.git/)'; then
+              fail "layer $n এমন ফোল্ডারে হাত দিতে চায় যা আপডেট দিয়ে বদলানো যায় না।"
+            fi
+            if git apply --check --whitespace=nowarn "$WORK/layer-$n.patch" 2> "$WORK/chk.err"; then
+              git apply --whitespace=nowarn "$WORK/layer-$n.patch"
+              echo "layer $n বসানো হয়েছে"
+            elif git apply --check --reverse --whitespace=nowarn "$WORK/layer-$n.patch" 2> /dev/null; then
+              echo "layer $n-এর বদল কোডে আগে থেকেই আছে — বাদ দিলাম"
+            else
+              head -n 15 "$WORK/chk.err" || true
+              DETAIL="$(head -n 4 "$WORK/chk.err" | tr '\n' ' ')"
+              fail "layer $n আপনার বর্তমান কোডের সাথে মিলছে না (মাঝে কেউ ফাইল বদলেছে?)। এই লেখাটা Claude-কে জানান: $DETAIL"
+            fi
+            LAST="$n"
+          done
+
+          mkdir -p .nexus-update
+          printf '%s\n' "$LAST" > .nexus-update/APPLIED
+          for f in "${files[@]}"; do rm -f "$f"; done
+          rmdir nexus-update 2> /dev/null || true
+
+          git config user.name "NexusOS Update"
+          git config user.email "nexus-update@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "কোনো বদল নেই।"
+            { echo "### ✅ নতুন কিছু বসানোর ছিল না"; } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          STAMP="$(date -u +%Y%m%d-%H%M%S)"
+          BACKUP="backup-before-update-$STAMP"
+          git push origin "HEAD:refs/heads/$BACKUP" || fail "ব্যাকআপ শাখা বানানো যায়নি। Actions ট্যাবে 'Run workflow' চেপে আবার চালান।"
+          git commit -q -m "NexusOS আপডেট: layer $LAST পর্যন্ত বসানো হলো"
+          git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}" || fail "GitHub-এ নতুন কোড পাঠানো যায়নি (মাঝে কেউ main-এ বদল করেছে?)। Actions ট্যাবে 'Run workflow' চেপে আবার চালান। না হলে এই লেখাটা Claude-কে জানান।"
+          {
+            echo "### ✅ আপডেট বসে গেছে"
+            echo
+            echo "- layer $LAST পর্যন্ত কোড বসানো হয়েছে"
+            echo "- আগের অবস্থার ব্যাকআপ শাখা: \`$BACKUP\`"
+            echo "- Railway কয়েক মিনিটের মধ্যে নিজে থেকেই নতুন কোড বানানো শুরু করবে"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "শেষ — আপডেট সফল।"
