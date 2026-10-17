@@ -46,10 +46,10 @@ export function createAdminRouter(): Router {
     res.json(await SelfHealingEngine.runFullDiagnostic());
   }));
 
-  router.get('/diagnostic/last', ((_req: Request, res: Response) => {
-    const { SelfHealingEngine } = require('../../lib/core/SelfHealingEngine');
+  router.get('/diagnostic/last', wrap(async (_req, res) => {
+    const { SelfHealingEngine } = await import('../../lib/core/SelfHealingEngine');
     res.json(SelfHealingEngine.getLastSnapshot() || { message: 'No diagnostic run yet' });
-  }) as any);
+  }));
 
   // ── Audit domain ───────────────────────────────────────────────────────────
   router.get('/audit/fraud-summary', wrap(async (req, res) => {
@@ -671,10 +671,10 @@ export function createAdminRouter(): Router {
     res.json(await SLAMonitor.getStats(since));
   }));
 
-  router.get('/cache/stats', ((_req: Request, res: Response) => {
-    const { NexusCache } = require('../../lib/cache/NexusCache');
+  router.get('/cache/stats', wrap(async (_req, res) => {
+    const { NexusCache } = await import('../../lib/cache/NexusCache');
     res.json(NexusCache.getStats());
-  }) as any);
+  }));
 
   router.delete('/cache/tag/:tag', wrap(async (req, res) => {
     const { NexusCache } = await import('../../lib/cache/NexusCache');

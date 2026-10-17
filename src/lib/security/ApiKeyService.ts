@@ -10,6 +10,7 @@
  * accept API-key auth is a product decision for the owner, not something to
  * silently flip on everywhere.
  */
+import { createHash, randomBytes } from 'crypto';
 import { NexusDB } from '../database/NexusDB';
 
 const COLLECTION = 'api_keys';
@@ -27,12 +28,10 @@ export interface ApiKeyRecord {
 export type ApiKeyPublic = Omit<ApiKeyRecord, 'keyHash'>;
 
 function sha256(input: string): string {
-  const { createHash } = require('crypto');
   return createHash('sha256').update(input).digest('hex');
 }
 
 function randomKey(): string {
-  const { randomBytes } = require('crypto');
   return `nx_live_${randomBytes(24).toString('base64url')}`;
 }
 

@@ -276,7 +276,7 @@ export function auditMiddleware() {
     const subject: AuditEntry['subject'] = {
       id: req.user?.uid || 'anonymous',
       type: req.user ? 'user' : 'system',
-      ip: req.headers['x-forwarded-for']?.split(',')[0] || req.socket?.remoteAddress,
+      ip: req.ip || req.socket?.remoteAddress,
       tenantId: req.headers['x-tenant-id'],
     };
 

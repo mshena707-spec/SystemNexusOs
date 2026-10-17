@@ -193,16 +193,47 @@ export class NexusError extends Error {
  * Converts a NexusError into a consistent HTTP response; falls back to a generic
  * 500 for un-migrated plain `Error` throws so behavior doesn't regress during migration.
  */
-export function nexusErrorHandler(err: unknown, req: any, res: any, _next: any) {
+export function nexusErrorHandler(err: unknown, req: any, res: any, next: any) {
+  // Headers already sent (a streaming response broke half-way): we can no longer write JSON.
+  // Hand over to Express' default handler, which closes the connection cleanly.
+  if (res?.headersSent && typeof next === 'function') return next(err);
+
   if (err instanceof NexusError) {
     const status = err.severity === 'critical' ? 500 : err.retryable ? 503 : 400;
     res.status(status).json(err.toClientResponse());
     return;
   }
+
+  // Errors raised by Express / body-parser / multer etc. already carry a safe 4xx status
+  // (413 "request entity too large", 400 "malformed JSON", 415 ...). They are the CLIENT's
+  // mistake, not a server fault: answer with that status instead of a misleading 500.
+  const e = err as { status?: unknown; statusCode?: unknown; type?: unknown } | null | undefined;
+  const httpStatus = Number(e?.status ?? e?.statusCode);
+  if (Number.isInteger(httpStatus) && httpStatus >= 400 && httpStatus < 500) {
+    const type = typeof e?.type === 'string' ? e.type : '';
+    let body = { code: `HTTP_${httpStatus}`, message: 'The request could not be processed.', message_bn: 'অনুরোধটি প্রক্রিয়া করা যায়নি।' };
+    if (httpStatus === 413 || type === 'entity.too.large') {
+      body = { code: 'PAYLOAD_TOO_LARGE', message: 'The request is too large.', message_bn: 'অনুরোধটি অনেক বড়।' };
+    } else if (type === 'entity.parse.failed') {
+      body = { code: 'INVALID_JSON', message: 'The request body is not valid JSON.', message_bn: 'অনুরোধের ডেটা সঠিক JSON নয়।' };
+    } else if (httpStatus === 415) {
+      body = { code: 'UNSUPPORTED_MEDIA_TYPE', message: 'Unsupported content type.', message_bn: 'এই ধরনের ডেটা গ্রহণযোগ্য নয়।' };
+    }
+    res.status(httpStatus).json({ error: body });
+    return;
+  }
+
   logger.child('unhandled').error('Unhandled error (not a NexusError — migrate this route)', err as Error, {
     path: req?.path,
   });
-  res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Something went wrong. Please try again.' } });
+  res.status(500).json({
+    error: {
+      code: 'INTERNAL_ERROR',
+      message: 'Something went wrong. Please try again.',
+      message_bn: 'কিছু একটা সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।',
+      ...(req?.traceId ? { traceId: req.traceId } : {}),
+    },
+  });
 }
 
 /**

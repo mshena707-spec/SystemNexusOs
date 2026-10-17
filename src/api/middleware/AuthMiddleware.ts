@@ -6,6 +6,7 @@
  */
 
 import { Request, Response, NextFunction } from 'express';
+import { JWTService } from '../../lib/security/auth/JWTService';
 
 export function requireAdminAuth(req: Request, res: Response, next: NextFunction): void {
   const token = req.headers['authorization']?.replace('Bearer ', '').trim();
@@ -18,7 +19,6 @@ export function requireAdminAuth(req: Request, res: Response, next: NextFunction
   }
 
   try {
-    const { JWTService } = require('../../lib/security/auth/JWTService');
     const claims = JWTService.verify(token);
     if (!claims || claims.type !== 'access' || (claims.role !== 'admin' && claims.role !== 'ceo')) {
       res.status(401).json({ error: 'Unauthorized' }); return;
@@ -34,7 +34,6 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
   const token = req.headers['authorization']?.replace('Bearer ', '').trim();
   if (!token) { res.status(401).json({ error: 'Unauthorized' }); return; }
   try {
-    const { JWTService } = require('../../lib/security/auth/JWTService');
     const claims = JWTService.verify(token);
     if (!claims || claims.type !== 'access') { res.status(401).json({ error: 'Unauthorized' }); return; }
     (req as any).authUser = { uid: claims.uid, role: claims.role, sessionId: claims.sessionId, authMethod: 'jwt' };

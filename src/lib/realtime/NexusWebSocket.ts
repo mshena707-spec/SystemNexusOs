@@ -15,6 +15,7 @@
 
 import { Server as SocketServer, Socket, Namespace } from 'socket.io';
 import { Server as HttpServer } from 'http';
+import { JWTService } from '../security/auth/JWTService';
 
 export interface RiderLocationUpdate {
   riderId: string;
@@ -96,10 +97,17 @@ export class NexusWebSocket {
     }
     try {
       const { createAdapter } = await import('@socket.io/redis-adapter');
-      const { createClient } = await import('redis');
-      const pub = createClient({ url: redisUrl });
+      const { createSafeRedisClient, attachRedisLogging } = await import('../infrastructure/RedisClient');
+      // The safe client never crashes the server and never waits forever for Redis.
+      const pub = await createSafeRedisClient(redisUrl, 'ws-pub');
+      if (!pub || !pub.isReady) {
+        try { await pub?.disconnect?.(); } catch { /* ignore */ }
+        console.log('[NexusWebSocket] Redis not reachable at start-up — single-instance mode');
+        return;
+      }
       const sub = pub.duplicate();
-      await Promise.all([pub.connect(), sub.connect()]);
+      attachRedisLogging(sub, 'ws-sub');
+      await sub.connect();
       this.io!.adapter(createAdapter(pub, sub));
       console.log('[NexusWebSocket] ✅ Redis adapter — horizontal scaling enabled');
     } catch {
@@ -119,8 +127,6 @@ export class NexusWebSocket {
         return;
       }
 
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const { JWTService } = require('../security/auth/JWTService');
       const claims = JWTService.verify(token);
       if (!claims) { next(new Error('Invalid token')); return; }
 
@@ -189,8 +195,7 @@ export class NexusWebSocket {
       socket.on('mark-read', async ({ notificationId }: { notificationId: string }) => {
         if (!notificationId) return;
         try {
-          // eslint-disable-next-line @typescript-eslint/no-var-requires
-          const { NexusDB } = require('../database/NexusDB');
+          const { NexusDB } = await import('../database/NexusDB');
           await NexusDB.update('notifications', notificationId, { read: true });
         } catch { /* best-effort */ }
       });
@@ -254,8 +259,7 @@ export class NexusWebSocket {
       await socket.join('fleet-admins');
 
       try {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const { RiderLocationServer } = require('../delivery/RiderLocationService');
+        const { RiderLocationServer } = await import('../delivery/RiderLocationService');
         const riders = await RiderLocationServer.getLiveRiders();
         socket.emit('initial-positions', riders);
       } catch { /* no riders yet */ }
@@ -298,8 +302,7 @@ export class NexusWebSocket {
   // ── Helpers ───────────────────────────────────────────────────────────────
 
   private async persistLocation(data: RiderLocationUpdate): Promise<void> {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { NexusDB } = require('../database/NexusDB');
+    const { NexusDB } = await import('../database/NexusDB');
     await NexusDB.set('rider_locations', data.riderId, {
       riderId: data.riderId, lat: data.lat, lng: data.lng,
       accuracy: data.accuracy, speed: data.speed, heading: data.heading,
@@ -314,15 +317,13 @@ export class NexusWebSocket {
   }
 
   private async persistChatMsg(msg: ChatMessage): Promise<void> {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { NexusDB } = require('../database/NexusDB');
+    const { NexusDB } = await import('../database/NexusDB');
     await NexusDB.set('chat_messages', msg.id, msg as unknown as Record<string, unknown>);
   }
 
   private async aiReply(customerMsg: ChatMessage, ns: Namespace): Promise<void> {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const { NexusUnifiedCore } = require('../core/NexusUnifiedCore');
+      const { NexusUnifiedCore } = await import('../core/NexusUnifiedCore');
       const res = await NexusUnifiedCore.process(customerMsg.content, {
         agentRole: 'customer_support', userId: 'ai_agent',
         systemInstruction: 'You are a concise, helpful customer support agent for Nexus Marketplace.',

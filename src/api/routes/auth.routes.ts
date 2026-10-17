@@ -23,14 +23,17 @@ export function createAuthRouter(deps: {
   router.post('/login', async (req: Request, res: Response) => {
     const { idToken } = req.body;
     if (!idToken) { res.status(400).json({ error: 'idToken required' }); return; }
-    const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim()
-      || req.socket.remoteAddress || 'unknown';
+    // req.ip honours the server's `trust proxy` setting; the raw header is forgeable.
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
     try {
-      const admin = await import('firebase-admin');
-      const decoded = await admin.auth().verifyIdToken(idToken);
-      const uid = decoded.uid;
+      // Goes through the shared AdminSDK helper: `import('firebase-admin')` + `admin.auth()`
+      // (what this used to do) does not work in an ES-module project, so every login failed.
+      const { verifyIdToken } = await import('../../lib/firebase-admin/AdminSDK');
+      const decoded = await verifyIdToken(idToken);
+      if (!decoded) throw new Error('Invalid or expired ID token');
+      const uid = decoded.uid as string;
 
-      let role: any = decoded.role || (decoded as any).claims?.role;
+      let role: any = (decoded as any).role || (decoded as any).claims?.role;
       if (!role) {
         const { NexusDB } = await import('../../lib/database/NexusDB');
         const userDoc = await NexusDB.get('users', uid);

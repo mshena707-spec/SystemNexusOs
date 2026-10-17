@@ -42,8 +42,16 @@ export interface SecurityEvent {
 // which is correct across multiple server instances. See checkRequestRate()
 // and recordFailedLogin() below.
 const RATE_WINDOW_MS = 60 * 1000;          // 1 minute window
-const RATE_THRESHOLD_USER = 120;            // >120 req/min from one user = anomaly
-const RATE_THRESHOLD_IP   = 300;            // >300 req/min from one IP = anomaly
+// Owner-tunable from Railway → Variables (no code change needed).
+// The IP limit is deliberately generous: in Bangladesh many mobile customers share ONE
+// public address (carrier-grade NAT), so a small per-IP number would lock out real buyers
+// during a busy hour. It only exists to stop a single machine hammering the server.
+const envInt = (name: string, fallback: number): number => {
+  const n = parseInt(process.env[name] || '', 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+};
+const RATE_THRESHOLD_USER = envInt('RATE_ANOMALY_USER_PER_MIN', 600);   // one signed-in user
+const RATE_THRESHOLD_IP   = envInt('RATE_ANOMALY_IP_PER_MIN',   3000);  // one public IP address
 
 const AI_MISUSE_PATTERNS = [
   'ignore previous instructions', 'ignore all previous instructions',

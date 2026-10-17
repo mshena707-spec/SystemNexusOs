@@ -329,7 +329,7 @@ export function abacMiddleware(resourceType: string, action: ABACAction['type'])
       userId: req.user?.uid || 'anonymous',
       roles: req.user?.roles || ['customer'],
       tenantId: req.headers['x-tenant-id'],
-      ipAddress: req.headers['x-forwarded-for']?.split(',')[0] || req.socket?.remoteAddress,
+      ipAddress: req.ip || req.socket?.remoteAddress,
       sessionId: req.headers['x-session-id'],
     };
 

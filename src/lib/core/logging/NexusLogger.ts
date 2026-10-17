@@ -291,7 +291,7 @@ export function requestLogger() {
         status: res.statusCode,
         duration_ms: duration,
         traceId,
-        ip: req.headers['x-forwarded-for'] || req.socket?.remoteAddress,
+        ip: req.ip || req.socket?.remoteAddress,
       });
     });
 

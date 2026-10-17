@@ -16,9 +16,19 @@
  * Integrates with existing OllamaAdapter and NexusConfig.
  */
 
-import { execSync } from 'child_process';
+// NOTE: default import + wrapper on purpose. A *named* import from a Node built-in
+// ("import { execSync } from 'child_process'") makes the browser (Vite) build fail
+// because this file can be reached from the client bundle through lazy imports
+// (NexusUnifiedCore -> MemoryCore -> NexusDB -> CapacityEstimator). This code only ever
+// RUNS on the server; the wrapper is evaluated lazily, never at import time.
+import childProcess from 'child_process';
 import os from 'os';
 import fs from 'fs';
+
+/** Lazy wrapper around child_process.execSync (see the import note above). */
+function execSync(command: string, options?: Record<string, unknown>): Buffer {
+  return (childProcess as unknown as { execSync: (c: string, o?: unknown) => Buffer }).execSync(command, options);
+}
 
 export type HardwareTier = 'minimal' | 'standard' | 'powerful' | 'enterprise';
 

@@ -115,8 +115,12 @@ export class DeviceFingerprintService {
   // ── Private helpers ──────────────────────────────────────────────────
 
   private static _extractIP(req: Request): string {
-    const forwarded = req.headers['x-forwarded-for'] as string | undefined;
-    if (forwarded) return forwarded.split(',')[0].trim();
-    return req.socket?.remoteAddress ?? req.ip ?? 'unknown';
+    // Express works out the real visitor address from the proxy chain according to
+    // the `trust proxy` setting made in server.ts (Railway sits in front of the app).
+    // Reading the X-Forwarded-For header by hand — as this used to do — lets any
+    // visitor invent an address, which defeats rate limits and poisons audit logs.
+    const raw = req.ip || req.socket?.remoteAddress || 'unknown';
+    // "::ffff:1.2.3.4" is just the IPv4 address 1.2.3.4 written the IPv6 way.
+    return raw.startsWith('::ffff:') ? raw.slice(7) : raw;
   }
 }

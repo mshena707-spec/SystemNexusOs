@@ -75,13 +75,13 @@ export class RedisTaskQueue extends EventEmitter {
     if (!redisUrl) return;
 
     try {
-      const { createClient } = await import('redis');
-      const client = createClient({
-        url: redisUrl,
-        socket: { reconnectStrategy: (retries) => Math.min(retries * 100, 5000) },
-      });
+      // Safe client: error listener attached BEFORE connecting (an unhandled Redis error used
+      // to crash the whole server) and a bounded first connect (`await client.connect()` used
+      // to wait forever when Redis was not up yet, so the server never finished starting).
+      const { createSafeRedisClient } = await import('../infrastructure/RedisClient');
+      const client = await createSafeRedisClient(redisUrl, 'queue');
+      if (!client) return;
 
-      await client.connect();
       client.on('error', (err: Error) => {
         this.log.warn('Redis error (falling back to memory):', { error: err.message });
         this.usingRedis = false;
@@ -90,7 +90,11 @@ export class RedisTaskQueue extends EventEmitter {
       client.on('ready', () => { this.usingRedis = true; });
 
       this.redis = client as unknown as typeof this.redis;
-      this.usingRedis = true;
+      this.usingRedis = !!client.isReady;
+      // An error event does not always mean the connection is gone — re-sync the flag with
+      // the real connection state every few seconds so the queue returns to Redis by itself.
+      const sync = setInterval(() => { this.usingRedis = !!client.isReady; }, 5_000);
+      (sync as any).unref?.();
     } catch (err) {
       this.log.warn('Redis connection failed, using in-memory fallback:', { error: String(err).slice(0, 80) });
     }

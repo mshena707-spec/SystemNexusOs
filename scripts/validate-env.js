@@ -3,11 +3,18 @@
  * scripts/validate-env.js
  * NexusOS — Pre-flight Environment Validator
  *
- * Run before starting the server:
- *   node scripts/validate-env.js
+ * Runs automatically before the server starts (see "start" in package.json):
+ *   node scripts/validate-env.js && tsx server.ts
  *
- * Exit code 0 = all critical vars present
- * Exit code 1 = critical vars missing (server WILL fail)
+ * Exit code 0 = the server can start (it may still print warnings)
+ * Exit code 1 = something is so wrong that starting would be unsafe or pointless
+ *
+ * Design rule: only block the start for things that make the server UNSAFE
+ * (no admin secret / no signing key in production) or UNABLE to store data
+ * (database chosen but its address is missing). Everything else — payment
+ * gateways, AI keys, e-mail, Firebase service account — is reported clearly
+ * but never prevents the shop from opening. The owner can add those later
+ * from the Railway "Variables" tab without redeploying code.
  */
 
 import dotenv from 'dotenv';
@@ -25,33 +32,43 @@ const COLORS = {
 };
 
 const c = (color, str) => `${COLORS[color]}${str}${COLORS.reset}`;
+const isProd = process.env.NODE_ENV === 'production';
 
 console.log(`\n${c('bold', '╔══════════════════════════════════════════════════╗')}`);
 console.log(`${c('bold', '║  NexusOS — Pre-flight Environment Validator       ║')}`);
 console.log(`${c('bold', '╚══════════════════════════════════════════════════╝')}\n`);
+console.log(`Mode: ${isProd ? 'PRODUCTION' : 'development'}\n`);
+
+const dbProvider = (process.env.DB_PROVIDER || 'firestore').toLowerCase();
 
 // ── Variable definitions ──────────────────────────────────────────────────────
+// [envKey, severity: 'critical'|'warning'|'info', description]
+// "critical" means the server is unsafe/unusable without it.
 const checks = [
-  // [envKey, severity: 'critical'|'warning'|'info', description]
-  ['OWNER_SECRET',           'critical', 'Admin API secret — generate: openssl rand -hex 32'],
-  ['JWT_SECRET',             'critical', 'JWT signing key — generate: openssl rand -hex 64'],
-  ['FIREBASE_PROJECT_ID',    'critical', 'Firebase project ID'],
-  ['FIREBASE_CLIENT_EMAIL',  'critical', 'Firebase service account email'],
-  ['FIREBASE_PRIVATE_KEY',   'critical', 'Firebase service account private key'],
+  ['OWNER_SECRET',           isProd ? 'critical' : 'warning', 'Owner/admin secret (the master key for the admin panel) — generate: openssl rand -hex 32'],
+  ['JWT_SECRET',             isProd ? 'critical' : 'warning', 'Login-token signing key — generate: openssl rand -hex 64'],
 
-  ['GEMINI_API_KEY',         'warning',  'Gemini AI (free) — get at ai.google.dev'],
-  ['GROQ_API_KEY',           'warning',  'Groq AI (free) — get at console.groq.com'],
+  // Firebase service account: the server needs it to read/write the SAME database the
+  // storefront uses (orders, products, users) and to verify logins. Without it the shop
+  // pages still open, but secure checkout / payment confirmation / admin APIs stay off.
+  ['FIREBASE_PROJECT_ID',    'warning',  'Firebase project ID (service account) — needed for secure checkout & order confirmation'],
+  ['FIREBASE_CLIENT_EMAIL',  'warning',  'Firebase service-account e-mail'],
+  ['FIREBASE_PRIVATE_KEY',   'warning',  'Firebase service-account private key'],
 
-  ['STRIPE_SECRET_KEY',      'warning',  'Stripe payments (international)'],
-  ['BKASH_APP_KEY',          'info',     'bKash mobile payments (Bangladesh)'],
-  ['NAGAD_MERCHANT_ID',      'info',     'Nagad mobile payments (Bangladesh)'],
+  ['GEMINI_API_KEY',         'info',     'Gemini AI (free) — get at ai.google.dev'],
+  ['GROQ_API_KEY',           'info',     'Groq AI (free) — get at console.groq.com'],
+
+  ['STRIPE_SECRET_KEY',      'info',     'Stripe card payments (optional — Cash on Delivery works without it)'],
+  ['STRIPE_WEBHOOK_SECRET',  'info',     'Stripe webhook signing secret (needed only if Stripe is enabled)'],
+  ['BKASH_APP_KEY',          'info',     'bKash payment gateway (optional — manual bKash/Nagad number payment works without it)'],
+  ['NAGAD_MERCHANT_ID',      'info',     'Nagad payment gateway (optional)'],
 
   ['WHATSAPP_TOKEN',         'info',     'WhatsApp Business API'],
   ['TELEGRAM_BOT_TOKEN',     'info',     'Telegram bot'],
-  ['SMTP_HOST',              'warning',  'Email SMTP host'],
+  ['SMTP_HOST',              'info',     'E-mail (SMTP) host'],
 
-  ['REDIS_URL',              'info',     'Redis cache (optional but recommended)'],
-  ['APP_URL',                'warning',  'Production URL (e.g. https://yourdomain.com)'],
+  ['REDIS_URL',              'info',     'Redis cache (optional but recommended for speed with many users)'],
+  ['APP_URL',                'warning',  'Public web address of the shop (e.g. https://yourshop.up.railway.app)'],
 ];
 
 let criticalMissing = 0;
@@ -69,6 +86,13 @@ for (const [key, severity, desc] of checks) {
   }
 }
 
+// ── Strength checks on the two secrets (production only) ──────────────────────
+const weak = [];
+for (const key of ['OWNER_SECRET', 'JWT_SECRET']) {
+  const v = process.env[key];
+  if (v && v.trim() !== '' && isProd && v.length < 24) weak.push(key);
+}
+
 // ── Print present vars ────────────────────────────────────────────────────────
 if (results.present.length > 0) {
   console.log(c('green', `✅ Present (${results.present.length}):`));
@@ -81,7 +105,7 @@ if (results.present.length > 0) {
 
 // ── Print critical missing ────────────────────────────────────────────────────
 if (results.critical.length > 0) {
-  console.log(c('red', `❌ CRITICAL — Missing (${results.critical.length}) — Server WILL NOT start correctly:`));
+  console.log(c('red', `❌ CRITICAL — Missing (${results.critical.length}) — the server will NOT start:`));
   for (const { key, desc } of results.critical) {
     console.log(`   ${c('red', '●')} ${c('bold', key)}`);
     console.log(`     → ${desc}`);
@@ -89,9 +113,14 @@ if (results.critical.length > 0) {
   console.log('');
 }
 
+if (weak.length > 0) {
+  console.log(c('yellow', `⚠️  Weak secret(s): ${weak.join(', ')} — use at least 32 random characters in production.`));
+  console.log('');
+}
+
 // ── Print warning missing ─────────────────────────────────────────────────────
 if (results.warning.length > 0) {
-  console.log(c('yellow', `⚠️  WARNING — Missing (${results.warning.length}) — Some features will be disabled:`));
+  console.log(c('yellow', `⚠️  WARNING — Missing (${results.warning.length}) — the shop starts, but some features stay off:`));
   for (const { key, desc } of results.warning) {
     console.log(`   ${c('yellow', '●')} ${key}`);
     console.log(`     → ${desc}`);
@@ -109,7 +138,6 @@ if (results.info.length > 0) {
 }
 
 // ── DB Provider check ─────────────────────────────────────────────────────────
-const dbProvider = process.env.DB_PROVIDER ?? 'firestore';
 console.log(c('cyan', `📦 DB_PROVIDER: ${dbProvider}`));
 if (dbProvider === 'postgres' && !process.env.POSTGRES_URL) {
   console.log(c('red', '   ❌ DB_PROVIDER=postgres but POSTGRES_URL is not set!'));
@@ -120,8 +148,22 @@ if (dbProvider === 'postgres' && !process.env.POSTGRES_URL) {
 } else if (dbProvider === 'mongodb' && !process.env.MONGODB_URI) {
   console.log(c('red', '   ❌ DB_PROVIDER=mongodb but MONGODB_URI is not set!'));
   criticalMissing++;
+} else if (dbProvider === 'firestore') {
+  const haveAdmin = process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY
+    || process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  if (haveAdmin) {
+    console.log(c('green', '   ✅ Firestore (service account found)'));
+  } else {
+    console.log(c('yellow', '   ⚠️  DB_PROVIDER=firestore but no Firebase service account is set.'));
+    console.log(c('yellow', '      The server will run in LIMITED mode (no secure checkout / payment confirmation).'));
+    warningMissing++;
+  }
 } else {
   console.log(c('green', `   ✅ DB config looks valid for provider: ${dbProvider}`));
+}
+if (isProd && dbProvider === 'memory') {
+  console.log(c('red', '   ❌ DB_PROVIDER=memory in production would lose ALL data on every restart!'));
+  criticalMissing++;
 }
 console.log('');
 
@@ -132,7 +174,6 @@ console.log(c('cyan', `🤖 AI Providers active: ${aiProviders.length}`));
 if (aiProviders.length === 0) {
   console.log(c('yellow', '   ⚠️  No AI provider keys found. System will use offline fallback only.'));
   console.log(c('yellow', '   → Get free keys: GEMINI at ai.google.dev, GROQ at console.groq.com'));
-  warningMissing++;
 } else {
   console.log(c('green', `   ✅ Active: ${aiProviders.map(k => k.replace('_API_KEY', '')).join(', ')}`));
 }
@@ -141,13 +182,13 @@ console.log('');
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log('─'.repeat(52));
 if (criticalMissing > 0) {
-  console.log(c('red', `\n🚨 ${criticalMissing} CRITICAL variable(s) missing.`));
-  console.log(c('red', '   Server will fail to start or have broken functionality.'));
-  console.log(c('yellow', '\n📋 Action: cp .env.example .env  →  fill in missing values\n'));
+  console.log(c('red', `\n🚨 ${criticalMissing} CRITICAL problem(s). The server will not start until they are fixed.`));
+  console.log(c('red', '   সার্ভার চালু হবে না — উপরের লাল লাইনগুলো Railway → Variables-এ যোগ/ঠিক করুন।'));
+  console.log(c('yellow', '\n📋 Action: add the missing variables in Railway → your service → Variables, then redeploy.\n'));
   process.exit(1);
 } else if (warningMissing > 0) {
-  console.log(c('yellow', `\n⚠️  ${warningMissing} warning(s). Server will start but some features may be limited.`));
-  console.log(c('green', '✅ All critical variables are present.\n'));
+  console.log(c('yellow', `\n⚠️  ${warningMissing} warning(s). The server starts, but some features are limited.`));
+  console.log(c('green', '✅ No blocking problems.\n'));
   process.exit(0);
 } else {
   console.log(c('green', '\n🎉 All checks passed! Ready for production.\n'));

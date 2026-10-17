@@ -22,20 +22,28 @@
  * Falls back to direct DB if Redis unavailable.
  */
 
-let redisClient: Record<string, (...args: unknown[]) => unknown> | null = null;
+import { createSafeRedisClient, redisUrlFromEnv } from '../infrastructure/RedisClient';
 
-async function getRedis() {
-  if (redisClient) return redisClient;
-  const url = process.env.REDIS_URL || process.env.UPSTASH_REDIS_URL;
+// The redis client is dynamically imported (it is an optional package), so it is typed loosely here.
+type RedisLike = any;
+let redisClient: RedisLike | null = null;
+let redisInit: Promise<RedisLike | null> | null = null;
+
+/**
+ * Returns a connected Redis client, or null when Redis is not configured / not reachable
+ * right now (callers then simply use the in-memory cache). One shared client for the
+ * process; it reconnects by itself, so a Redis restart no longer disables caching until
+ * the server is restarted.
+ */
+async function getRedis(): Promise<RedisLike | null> {
+  const url = redisUrlFromEnv();
   if (!url) return null;
-  try {
-    const { createClient } = await import('redis');
-    const c = createClient({ url });
-    await c.connect();
-    c.on('error', () => { redisClient = null; });
-    redisClient = c as unknown as typeof redisClient;
-    return redisClient;
-  } catch { return null; }
+  if (!redisInit) {
+    redisInit = createSafeRedisClient(url, 'cache', { failFast: true })
+      .then((c) => { redisClient = c as RedisLike | null; return redisClient; });
+  }
+  await redisInit;
+  return redisClient && redisClient.isReady ? redisClient : null;
 }
 
 // In-memory fallback (L1 cache — process-local)

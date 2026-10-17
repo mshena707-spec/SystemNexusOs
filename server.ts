@@ -31,7 +31,8 @@ import { RecommendationEngine }                from "./src/lib/business-intellig
 
 const srvLog = logger.child('Server');
 import { nexusWS } from "./src/lib/realtime/NexusWebSocket";
-import { securityHeaders, botDetection, apiRateLimit, authRateLimit, aiRateLimit, paymentRateLimit } from "./src/lib/security/middleware/SecurityMiddleware";
+import { securityHeaders, botDetection, apiRateLimit, authRateLimit, aiRateLimit, paymentRateLimit, closeRateLimitRedis, getRateLimitStatus } from "./src/lib/security/middleware/SecurityMiddleware";
+import { getAdminStatus } from "./src/lib/firebase-admin/AdminSDK";
 import { HardwareAutoConfig } from "./src/lib/infrastructure/HardwareAutoConfig";
 import { CapacityEstimator } from "./src/lib/infrastructure/CapacityEstimator";
 import { FeatureStore } from "./src/lib/core/config/FeatureStore";
@@ -63,10 +64,20 @@ import { SLAMonitor } from "./src/lib/support/SLAMonitor";
 import { PasswordResetService, EmailVerificationService } from "./src/lib/auth/PasswordResetService";
 import { OrderIdGenerator } from "./src/lib/commerce/OrderIdGenerator";
 import { NexusDB } from "./src/lib/database/NexusDB";
+// Previously loaded with CommonJS require() inside an ES-module file, which throws
+// "require is not defined" at runtime (package.json has "type":"module"). Every
+// JWT-protected route, the shutdown guard, the anomaly guard and /api/metrics were
+// silently broken by that. Proper static imports share one module instance.
+import { JWTService } from "./src/lib/security/auth/JWTService";
+import { OwnerControlEngine } from "./src/lib/control/OwnerControlEngine";
+import { AnomalyDetectionEngine } from "./src/lib/security/auth/AnomalyDetectionEngine";
+import { DeviceFingerprintService } from "./src/lib/security/auth/DeviceFingerprint";
+import { OmniConnector } from "./src/lib/integrations/OmniConnector";
+import { GlobalProviderRegistry } from "./src/lib/ai/providers/ProviderRegistry";
+import { AgentRegistry } from "./src/lib/core/registry/AgentRegistry";
 
 dotenv.config();
 
-import rateLimit from "express-rate-limit";
 import { sanitizeInput } from "./src/api/middleware/InputValidator";
 
 // ── Admin API auth middleware — Phase M: real JWT verification ───────────
@@ -86,7 +97,6 @@ function requireAdminAuth(req: Request, res: Response, next: NextFunction) {
   }
 
   try {
-    const { JWTService } = require("./src/lib/security/auth/JWTService");
     const claims = JWTService.verify(token);
     if (!claims || claims.type !== 'access' || (claims.role !== 'admin' && claims.role !== 'ceo')) {
       res.status(401).json({ error: "Unauthorized" });
@@ -104,7 +114,6 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
   const token = req.headers["authorization"]?.replace("Bearer ", "").trim();
   if (!token) { res.status(401).json({ error: "Unauthorized" }); return; }
   try {
-    const { JWTService } = require("./src/lib/security/auth/JWTService");
     const claims = JWTService.verify(token);
     if (!claims || claims.type !== 'access') { res.status(401).json({ error: "Unauthorized" }); return; }
     (req as any).authUser = { uid: claims.uid, role: claims.role, sessionId: claims.sessionId, authMethod: 'jwt' };
@@ -125,7 +134,6 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
 // itself errors, so a control-plane hiccup never takes down the business.
 async function shutdownGuard(req: Request, res: Response, next: NextFunction) {
   try {
-    const { OwnerControlEngine } = require("./src/lib/control/OwnerControlEngine");
     const engaged = await OwnerControlEngine.isShutdown();
     if (engaged) {
       res.status(503).json({ error: "System is in emergency shutdown mode. New requests are temporarily paused by the business owner.", code: "EMERGENCY_SHUTDOWN" });
@@ -140,8 +148,10 @@ async function shutdownGuard(req: Request, res: Response, next: NextFunction) {
 // for severe rate breaches, to avoid false-positive lockouts in production.
 async function anomalyGuard(req: Request, res: Response, next: NextFunction) {
   try {
-    const { AnomalyDetectionEngine } = require("./src/lib/security/auth/AnomalyDetectionEngine");
-    const { DeviceFingerprintService } = require("./src/lib/security/auth/DeviceFingerprint");
+    // Only API calls count. Page files, images and scripts are not "requests" in this sense —
+    // a single page view loads dozens of them, and counting them would flag normal customers.
+    const p = (req.originalUrl || req.url || '').split('?')[0];
+    if (!p.startsWith('/api/') || p.startsWith('/api/health')) { next(); return; }
     const authUser = (req as any).authUser;
     const fp = DeviceFingerprintService.extract(req);
     // Phase N: checkRequestRate is now async (Redis-backed distributed
@@ -172,14 +182,10 @@ function verifyMetaSignature(req: Request, secret: string): boolean {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Rate limiting
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100,
-  message: 'Too many requests from this IP, please try again after 15 minutes',
-  standardHeaders: true,
-  legacyHeaders: false,
-});
+// Rate limiting lives in src/lib/security/middleware/SecurityMiddleware.ts (apiRateLimit).
+// The old limiter here allowed only 100 requests per IP per 15 minutes and — because the
+// server was not told it sits behind Railway's proxy — counted EVERY visitor as one IP, so
+// the whole shop would have been blocked after 100 requests in total.
 
 let stripeClient: Stripe | null = null;
 function getStripe(): Stripe {
@@ -262,11 +268,30 @@ async function startServer() {
   const app = express();
   const PORT = parseInt(process.env.PORT || "3000", 10);
 
-  // Sentry request/error handlers, deferred from the init block above
-  // until `app` exists (see note there).
-  if (sentryModule) {
-    app.use(sentryModule.Handlers.requestHandler() as import('express').RequestHandler);
-    app.use(sentryModule.Handlers.errorHandler() as import('express').ErrorRequestHandler);
+  // ── Behind Railway's proxy ───────────────────────────────────────────────
+  // Railway (like every host) puts a proxy in front of the app. Without this setting
+  // Express sees the PROXY's address for every visitor, so every IP-based protection
+  // (rate limits, audit logs, fraud checks) would treat the whole country as one person.
+  // TRUST_PROXY = how many proxy hops sit in front of the app (Railway alone = 1; add one
+  // more if you put Cloudflare in front). Also accepts "true"/"false" or a list of ranges.
+  {
+    const tp = (process.env.TRUST_PROXY ?? '1').trim();
+    app.set('trust proxy', tp === 'true' ? true : tp === 'false' ? false : /^\d+$/.test(tp) ? parseInt(tp, 10) : tp);
+  }
+  app.disable('x-powered-by');
+
+  // Safe browser headers (Content-Security-Policy etc.). Set CSP_MODE=report-only or off in
+  // Railway → Variables if a future change ever needs it relaxed.
+  app.use(securityHeaders);
+
+  // Send JS/CSS/JSON compressed — about 4x smaller downloads on slow mobile networks.
+  // Optional package: the shop works without it, just slower.
+  try {
+    const compressionPkg: any = await import('compression' as string);
+    const compression = compressionPkg.default ?? compressionPkg;
+    app.use(compression());
+  } catch {
+    console.info("ℹ️  [Startup] 'compression' package not installed — responses are sent uncompressed");
   }
 
   // CORS middleware
@@ -294,10 +319,15 @@ async function startServer() {
     next();
   });
 
+  // Flood protection for every /api call. Placed BEFORE body parsing so an abusive caller is
+  // turned away cheaply. Counts signed-in people individually and anonymous visitors by IP
+  // with a high ceiling (see SecurityMiddleware.ts for why and how to tune it).
+  app.use('/api/', apiRateLimit);
+
   // Log every request for intrusion detection
   app.use((req: Request, res: Response, next: NextFunction) => {
-    const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown';
-    logRequest(ip, req.path);
+    // req.ip follows the `trust proxy` setting above; the raw X-Forwarded-For header can be faked.
+    logRequest(req.ip || req.socket.remoteAddress || 'unknown', req.path);
     next();
   });
 
@@ -312,8 +342,17 @@ async function startServer() {
   // Phase M: per-request anomaly guard (rate anomaly detection, fail-open)
   app.use(anomalyGuard);
 
-  app.use(express.json({ limit: "50mb" }));
-  app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+  // Request-body size limit. 50 MB (the old value) lets one caller tie up server memory with
+  // a single request; 2 MB is plenty for orders, products and chat. Product photos go straight
+  // from the browser to Firebase Storage, never through here. Raise with BODY_LIMIT if needed.
+  // `verify` keeps the untouched bytes of every request: payment providers sign the raw body,
+  // and re-serialising parsed JSON can never reproduce it exactly.
+  const BODY_LIMIT = process.env.BODY_LIMIT || "2mb";
+  app.use(express.json({
+    limit: BODY_LIMIT,
+    verify: (req: any, _res, buf: Buffer) => { req.rawBody = buf; },
+  }));
+  app.use(express.urlencoded({ extended: true, limit: BODY_LIMIT }));
 
   // Distributed shared state (Redis → Firestore → in-memory fallback)
   // Phase A: AI token/cost counters (in-memory, flushed to Prometheus)
@@ -372,46 +411,18 @@ async function startServer() {
     next();
   });
 
-  // Apply rate limits to all /api routes
-  app.use("/api/", apiLimiter);
-
   // ── API versioning (/api/v1/) ──────────────────────────────────────────────
-  // All routes are registered under /api/*. The /api/v1/* prefix is the
-  // canonical versioned entry point — clients should use it. The bare /api/*
-  // prefix remains active for backward compatibility with existing integrations
-  // and will be kept until a formal deprecation window is announced.
-  //
-  // Strategy: a transparent rewrite middleware that strips /api/v1 and forwards
-  // to the same handlers without duplicating any route definitions.
-  app.use('/api/v1', (req: Request, _res: Response, next: NextFunction) => {
-    // Rewrite URL to strip the /v1 segment so all downstream handlers match /api/*
-    req.url = req.url === '/' ? '/' : req.url;
-    // Mark the request as coming through the versioned endpoint for metrics/logging
-    (req as any).apiVersion = 'v1';
+  // /api/v1/X and /api/X reach the very same handler. The old code tried to do this with
+  // next('router'), which does not mean "continue" in Express — it ends the request, so every
+  // /api/v1/* call came back 404. A plain URL rewrite (before any route is matched) is the
+  // correct, simple way.
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (req.url === '/api/v1' || req.url.startsWith('/api/v1/') || req.url.startsWith('/api/v1?')) {
+      req.url = '/api' + req.url.slice('/api/v1'.length);
+      (req as any).apiVersion = 'v1';
+      res.setHeader('X-API-Version', 'v1');
+    }
     next();
-  });
-
-  // Forward /api/v1/* → /api/* by rewriting path before route handlers run
-  app.use('/api/v1', (req: Request, res: Response, next: NextFunction) => {
-    // Already stripped /v1 from req.url above; now re-attach /api prefix
-    // so Express route matching against /api/* works correctly
-    req.url = req.url;
-    next('route');
-  });
-
-  // Alias: any /api/v1/X request also hits the identical /api/X handler.
-  // We mount all /api routes on a shared router and attach it at both prefixes.
-  const apiRouter = require('express').Router();
-
-  // Attach versioned router — delegates to main app handlers transparently
-  app.use('/api/v1', (req: Request, res: Response, next: NextFunction) => {
-    // Redirect internally: rewrite originalUrl and url then re-dispatch
-    const stripped = req.path; // /v1 already stripped by Express prefix match
-    req.url = stripped;
-    // Add versioning response headers
-    res.setHeader('X-API-Version', 'v1');
-    res.setHeader('X-API-Deprecated-Paths', 'Use /api/v1/* for all new integrations');
-    next('router');
   });
 
   // Ensure all /api/* responses include version info for discoverability
@@ -521,6 +532,19 @@ async function startServer() {
             status:   aiCount > 0 ? 'up' : 'degraded',
             providers: aiCount,
           },
+          // Firebase admin = the server's own key to the shop's Firestore database (secure
+          // checkout, order confirmation, server-side login). 'not_configured' is not an
+          // outage: the storefront still opens, those features just stay off.
+          firebaseAdmin: (() => {
+            const f = getAdminStatus();
+            return {
+              status: f.connected ? 'up' : f.configured ? 'configured' : 'not_configured',
+              projectId: f.projectId,
+              databaseId: f.databaseId,
+              ...(f.problem ? { note: f.problem } : {}),
+            };
+          })(),
+          rateLimiter: getRateLimitStatus(),
           server: {
             status:        'up',
             latencyMs:     Date.now() - start,
@@ -1253,14 +1277,12 @@ async function startServer() {
 
   // --- OmniHub Admin API ---
   app.get("/api/omni/logs", requireAdminAuth, async (req: Request, res: Response) => {
-    const { OmniConnector } = require("./src/lib/integrations/OmniConnector");
     const platform = req.query.platform as string | undefined;
     const limit = parseInt(req.query.limit as string || "50");
     res.json(await OmniConnector.getMessageLogs(limit, platform));
   });
 
   app.get("/api/omni/stats", requireAdminAuth, async (req: Request, res: Response) => {
-    const { OmniConnector } = require("./src/lib/integrations/OmniConnector");
     res.json(await OmniConnector.getStats());
   });
 
@@ -1291,7 +1313,6 @@ async function startServer() {
 
   // --- AI Provider Registry API (admin-protected) ---
   app.get("/api/ai/providers", requireAdminAuth, (req: Request, res: Response) => {
-    const { GlobalProviderRegistry } = require("./src/lib/ai/providers/ProviderRegistry");
     res.json(GlobalProviderRegistry.getHealthSummary());
   });
 
@@ -1300,19 +1321,16 @@ async function startServer() {
   // (Parts 3-4), not a new system — this is the first endpoint exposing it
   // as one list. Live registry data, not a static document.
   app.get("/api/admin/agents/capabilities", requireAdminAuth, (req: Request, res: Response) => {
-    const { AgentRegistry } = require("./src/lib/core/registry/AgentRegistry");
     res.json({ agents: AgentRegistry.listCapabilities() });
   });
 
   app.post("/api/ai/providers/role-override", requireAdminAuth, (req: Request, res: Response) => {
     const { role, providerId } = req.body;
-    const { GlobalProviderRegistry } = require("./src/lib/ai/providers/ProviderRegistry");
     GlobalProviderRegistry.setPrimaryForRole(role, providerId);
     res.json({ success: true, message: `Role "${role}" pinned to "${providerId}"` });
   });
 
   app.delete("/api/ai/providers/role-override/:role", requireAdminAuth, (req: Request, res: Response) => {
-    const { GlobalProviderRegistry } = require("./src/lib/ai/providers/ProviderRegistry");
     GlobalProviderRegistry.clearRoleOverride(req.params.role);
     res.json({ success: true });
   });
@@ -1338,10 +1356,6 @@ async function startServer() {
   });
 
   app.get("/api/metrics", (_req: Request, res: Response) => {
-    const { EventBus } = require("./src/lib/core/events/NexusEventBus");
-    const { GlobalProviderRegistry } = require("./src/lib/ai/providers/ProviderRegistry");
-    const { TaskQueue } = require("./src/lib/queue/TaskQueue");
-    const { AuditLog } = require("./src/lib/security/audit/ImmutableAuditLog");
     const ebMetrics = EventBus.getMetrics();
     const provHealth = GlobalProviderRegistry.getHealthSummary();
     const queueMetrics = TaskQueue.getMetrics();
@@ -2566,7 +2580,7 @@ async function startServer() {
     const { role, providerId } = req.body;
     if (!role || !providerId) { res.status(400).json({ error: 'role and providerId required' }); return; }
     try {
-      const { GlobalProviderRegistry: GPR } = require('./src/lib/ai/providers/ProviderRegistry');
+      const GPR = GlobalProviderRegistry;
       GPR.setPrimaryForRole(role, providerId);
       res.json({ success: true, message: `Role "${role}" pinned to provider "${providerId}"` });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
@@ -2575,7 +2589,7 @@ async function startServer() {
   // Clear role override
   app.delete('/api/admin/ai/role-override/:role', requireAdminAuth, async (req: Request, res: Response) => {
     try {
-      const { GlobalProviderRegistry: GPR } = require('./src/lib/ai/providers/ProviderRegistry');
+      const GPR = GlobalProviderRegistry;
       GPR.clearRoleOverride(req.params.role);
       res.json({ success: true });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
@@ -2584,7 +2598,7 @@ async function startServer() {
   // List all providers and their role overrides
   app.get('/api/admin/ai/providers', requireAdminAuth, async (_req: Request, res: Response) => {
     try {
-      const { GlobalProviderRegistry: GPR } = require('./src/lib/ai/providers/ProviderRegistry');
+      const GPR = GlobalProviderRegistry;
       const providers = GPR.listAll().map((p: any) => ({
         id: p.id,
         providerId: p.provider.providerId,
@@ -2721,7 +2735,6 @@ async function startServer() {
   });
 
   app.get("/api/admin/ai/providers/full", requireAdminAuth, (_req: Request, res: Response) => {
-    const { GlobalProviderRegistry } = require("./src/lib/ai/providers/ProviderRegistry");
     const summary = GlobalProviderRegistry.getHealthSummary();
     res.json({
       ...summary,
@@ -3247,21 +3260,8 @@ async function startServer() {
   // ── Phase A: API usage by day (replaces hardcoded mockApiData) ─────────
   
 
-    // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    // FIX: Catch-all for SPA - must come after all API routes
-    app.get("*", (req: Request, res: Response) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
-  }
+  // (static files + single-page-app fallback are registered at the very END of the routes,
+  //  see "END OF ROUTES" below — they must come after every other route.)
 
   // ── WebSocket: attach Socket.io to HTTP server ──────────────────────────
   // BEFORE: app.listen() — no WebSocket support
@@ -3565,20 +3565,6 @@ async function startServer() {
     });
   }, 'CSATBridge');
 
-  // CTO Audit Part 2, section 10: global error framework. Must be the LAST
-  // middleware registered — Express only routes errors here if every route/
-  // middleware above it either throws or calls next(err). Un-migrated plain
-  // Error throws still get a safe generic response (see nexusErrorHandler's
-  // own comment in NexusError.ts) so this is a net-safe addition, not a
-  // behavior change for existing routes.
-  app.use(nexusErrorHandler);
-
-  httpServer.listen(PORT, "0.0.0.0", () => {
-    console.log(`✅ Server running on http://localhost:${PORT}`);
-    console.log(`   WebSocket: ws://localhost:${PORT} (4 namespaces)`);
-    console.log(`   Mode: ${process.env.NODE_ENV || "development"}`);
-  });
-
   // ══════════════════════════════════════════════════════════════════
   // NEW ROUTES — Tax, Search, Reviews, Auth, SLA, Cache, Discounts
   // ══════════════════════════════════════════════════════════════════
@@ -3856,12 +3842,107 @@ async function startServer() {
     res.json({ success: true, ...result });
   });
 
+  // ══════════════════════════════════════════════════════════════════════
+  // END OF ROUTES — everything below must stay AFTER every route above.
+  // ══════════════════════════════════════════════════════════════════════
+  // Express answers with the FIRST handler that matches. The "send the web page for any other
+  // address" rule used to sit in the MIDDLE of this file, so every GET route registered after
+  // it — vendor products/orders/store, tax rules, product search, review lists, order tracking,
+  // SLA and cache stats — silently returned the home page instead of data in production.
+  // The error handler had the same problem (errors from later routes never reached it).
+
+  // An unknown API address must answer in JSON, never with the web page.
+  app.all('/api/*', (req: Request, res: Response) => {
+    res.status(404).json({ error: 'Not found', path: req.path });
+  });
+
+  if (process.env.NODE_ENV !== "production") {
+    // Development: Vite serves the app with live reload.
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(process.cwd(), "dist");
+
+    // Files in /assets carry a fingerprint in their name (index-AbC123.js) and never change,
+    // so browsers may keep them for a year. A missing one must be a real 404 — not index.html,
+    // which a browser would try to run as JavaScript after a new release.
+    app.use('/assets', express.static(path.join(distPath, 'assets'), { immutable: true, maxAge: '365d' }));
+    app.use('/assets', (_req: Request, res: Response) => { res.status(404).end(); });
+
+    app.use(express.static(distPath, {
+      index: false,
+      maxAge: '1h',
+      setHeaders: (res, filePath) => {
+        // The page itself, the service worker and the manifest must be re-checked every time,
+        // otherwise customers keep seeing the old version after a release.
+        if (/(^|[\\/])(sw\.js|registerSW\.js|workbox-[^\\/]+\.js|manifest\.webmanifest|index\.html)$/.test(filePath)) {
+          res.setHeader('Cache-Control', 'no-cache');
+        }
+      },
+    }));
+
+    // Single-page app: any other address is a page inside the app.
+    // If the web app was never built (dist/index.html missing) say so clearly with a 503 instead of
+    // an unexplained 500 — the API, health checks and everything else keep working meanwhile.
+    const indexHtmlPath = path.join(distPath, "index.html");
+    app.get("*", (_req: Request, res: Response) => {
+      res.setHeader('Cache-Control', 'no-cache');
+      res.sendFile(indexHtmlPath, (err) => {
+        if (err && !res.headersSent) {
+          console.error(`❌ [Frontend] Cannot send ${indexHtmlPath}: ${(err as Error).message} — was "npm run build" run?`);
+          res.status(503).type('html').send(
+            '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+            '<title>Nexus OS</title><body style="font-family:system-ui,sans-serif;max-width:32rem;margin:15vh auto;padding:0 1rem;text-align:center">' +
+            '<h1>একটু অপেক্ষা করুন</h1><p>সাইটটি এখনই প্রস্তুত হচ্ছে। কয়েক মিনিট পরে আবার চেষ্টা করুন।</p>' +
+            '<p style="color:#666">The site is being prepared. Please try again in a few minutes.</p></body>'
+          );
+        }
+      });
+    });
+  }
+
+  // ── Error handlers (must be last) ──────────────────────────────────────
+  // Sentry first so it records the error, then the Nexus formatter that sends a safe answer.
+  if (sentryModule) {
+    try {
+      const S: any = sentryModule;
+      if (typeof S.setupExpressErrorHandler === 'function') S.setupExpressErrorHandler(app);          // Sentry v8+
+      else if (S.Handlers?.errorHandler) app.use(S.Handlers.errorHandler());                          // Sentry v7
+    } catch (e) {
+      console.warn('[Sentry] Could not attach the error handler:', (e as Error).message);
+    }
+  }
+
+  // CTO Audit Part 2, section 10: global error framework. Must be the LAST
+  // middleware registered — Express only routes errors here if every route/
+  // middleware above it either throws or calls next(err). Un-migrated plain
+  // Error throws still get a safe generic response (see nexusErrorHandler's
+  // own comment in NexusError.ts) so this is a net-safe addition, not a
+  // behavior change for existing routes.
+  app.use(nexusErrorHandler);
+
+  // Railway's proxy keeps connections open for up to 60 s; Node's default of 5 s closes them
+  // first, which shows up as random "502 Bad Gateway" under load. Keep ours longer.
+  httpServer.keepAliveTimeout = 65_000;
+  httpServer.headersTimeout = 66_000;
+
+  httpServer.listen(PORT, "0.0.0.0", () => {
+    console.log(`✅ Server running on http://localhost:${PORT}`);
+    console.log(`   WebSocket: ws://localhost:${PORT} (4 namespaces)`);
+    console.log(`   Mode: ${process.env.NODE_ENV || "development"}`);
+  });
+
   // ── Graceful Shutdown ─────────────────────────────────────────────────
   // Handle SIGTERM (Docker/Railway/Render stop) and SIGINT (Ctrl+C)
   const gracefulShutdown = async (signal: string): Promise<void> => {
     console.log(`\n[Shutdown] ${signal} received — graceful shutdown starting...`);
 
-    // Stop accepting new connections
+    // Stop accepting new connections, and drop idle keep-alive ones right away so the
+    // shutdown does not wait for them to time out.
+    (httpServer as any).closeIdleConnections?.();
     httpServer.close(async (err) => {
       if (err) console.error('[Shutdown] HTTP server close error:', err);
 
@@ -3869,6 +3950,14 @@ async function startServer() {
       try {
         await redisTaskQueue.stop();
         console.log('[Shutdown] Task queue stopped');
+      } catch { /* ignore */ }
+
+      // Let running database work finish and close the connections politely, so a
+      // redeploy never leaves half-written records or exhausts the database's connection limit.
+      try {
+        await NexusDB.close();
+        await closeRateLimitRedis();
+        console.log('[Shutdown] Database & Redis connections closed');
       } catch { /* ignore */ }
 
       // Disconnect WebSocket
@@ -3955,7 +4044,6 @@ async function startServer() {
     // minutes, not per-request, since ping() is a real network call.
     cron.schedule("*/5 * * * *", async () => {
       try {
-        const { GlobalProviderRegistry } = require("./src/lib/ai/providers/ProviderRegistry");
         const result = await GlobalProviderRegistry.runHealthCheckSweep();
         if (result.recovered > 0) {
           console.log(`[Cron][AIProviderHealth] ${result.recovered}/${result.checked} unhealthy providers recovered`);

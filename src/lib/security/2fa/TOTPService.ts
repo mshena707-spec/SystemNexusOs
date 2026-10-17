@@ -14,6 +14,7 @@
  *   4. On every login → verifyToken() with current code
  */
 
+import { createHash } from 'crypto';
 import { NexusDB } from '../../database/NexusDB';
 import { ImmutableAuditLog } from '../audit/ImmutableAuditLog';
 
@@ -225,7 +226,6 @@ export class TOTPService {
   }
 
   private static hashBackupCode(code: string): string {
-    const { createHash } = require('crypto');
     return createHash('sha256')
       .update(code + (process.env.OWNER_SECRET || 'nexus-2fa-salt'))
       .digest('hex');

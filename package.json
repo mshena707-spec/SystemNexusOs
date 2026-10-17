@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "node scripts/validate-env.js; tsx server.ts",
-    "start": "NODE_ENV=production node scripts/validate-env.js && tsx server.ts",
+    "start": "NODE_ENV=production node scripts/validate-env.js && NODE_ENV=production tsx server.ts",
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
@@ -26,6 +26,7 @@
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
     "dotenv": "^17.2.3",
+    "compression": "^1.8.0",
     "express": "^4.21.2",
     "express-rate-limit": "^8.5.1",
     "firebase": "^12.11.0",

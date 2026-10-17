@@ -38,12 +38,19 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/scripts ./scripts
 COPY --from=builder /app/server.ts ./server.ts
 COPY --from=builder /app/src ./src
+COPY --from=builder /app/tsconfig.json ./tsconfig.json
 COPY --from=builder /app/tsconfig.server.json ./tsconfig.server.json
+# Firebase project identifiers (public names, not secrets). The server must talk to the very
+# same Firestore database the web app uses, and reads its name from this file.
+COPY --from=builder /app/firebase-applet-config.json ./firebase-applet-config.json
 
 # Data directory (SQLite, logs, uploads)
 RUN mkdir -p /data /app/logs /app/uploads && chown -R nexus:nexus /data /app/logs /app/uploads
 
 USER nexus
+
+# Always run in production mode inside this image (the web app is served from /app/dist).
+ENV NODE_ENV=production
 
 EXPOSE 3000
 
@@ -54,7 +61,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 
 # Use tini for proper signal handling
 ENTRYPOINT ["/sbin/tini", "--"]
-# Run through npm start, which is the same command "node scripts/validate-env.js && tsx server.ts"
-# used everywhere else in this project — one source of truth instead of a
-# second, divergent copy of the run command.
-CMD ["npm", "start"]
+# Same steps as `npm start` (check the settings, then start the server), but the server is
+# started with `exec` so IT — not a shell or npm in between — receives Railway's stop signal.
+# That lets it finish in-flight orders and close the database cleanly during a redeploy.
+CMD ["sh", "-c", "node scripts/validate-env.js && exec node --import tsx server.ts"]
