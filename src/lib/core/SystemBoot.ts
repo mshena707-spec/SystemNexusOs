@@ -14,7 +14,6 @@ import { AutomationEngine }                 from '../automation/AutomationEngine
 import { SelfHealingEngine }                from './SelfHealingEngine';
 import { MemoryEngine }                    from '../memory/NexusMemoryEngine';
 import { initOrchestration }               from '../orchestration/index';
-import { AuditLog }                          from '../security/audit/ImmutableAuditLog';
 import { TaskQueue, registerStandardWorkers }  from '../queue/TaskQueue';
 import { BIEngine }                            from '../business-intelligence/analytics/BIEngine';
 import { EvolutionEngine }                     from '../business-intelligence/autonomy/AutonomousEvolutionEngine';
@@ -94,12 +93,15 @@ export async function initializeSystemAbstractions(): Promise<void> {
     providers: GlobalProviderRegistry.listAll().length,
     channels: OmniConnector.getRegisteredPlatforms().length,
   });
-  // Phase 5: Record boot in immutable audit log
-  AuditLog.record('system.boot',
-    { id: 'system', type: 'system' },
-    { bootTimeMs: elapsed, env: NexusConfig.system.env, version: NexusConfig.system.version },
-    { outcome: 'success', severity: 'info' }
-  );
+  // Audit logging uses Node's crypto module and must remain server-only.
+  if (IS_SERVER) {
+    const { AuditLog } = await import('../security/audit/ImmutableAuditLog');
+    await AuditLog.record('system.boot',
+      { id: 'system', type: 'system' },
+      { bootTimeMs: elapsed, env: NexusConfig.system.env, version: NexusConfig.system.version },
+      { outcome: 'success', severity: 'info' }
+    );
+  }
 
   EventBus.emitAsync('system.ready', { bootTimeMs: elapsed }, 'SystemBoot');
 }
