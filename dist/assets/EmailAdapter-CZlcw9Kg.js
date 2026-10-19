@@ -1,1 +1,0 @@
-import{m as a}from"./index-Yp9xl2m5.js";import"./vendor-react--Rr4qsuz.js";import"./vendor-3d-DctvzOdX.js";import"./vendor-firebase-B__UvtRn.js";const s=new a;class c{static async send({to:r,subject:t,html:e}){return s.sendMessage(r,e.replace(/<[^>]+>/g," ").trim(),{subject:t,html:e})}}export{c as EmailAdapter};

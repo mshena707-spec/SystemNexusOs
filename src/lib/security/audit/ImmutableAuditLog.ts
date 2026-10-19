@@ -22,7 +22,6 @@
  *   const chain = await AuditLog.verifyChain(100); // verify last 100 records
  */
 
-import crypto from 'crypto';
 import { logger } from '../../core/logging/NexusLogger';
 import { EventBus } from '../../core/events/NexusEventBus';
 import { NexusConfig } from '../../core/config/NexusConfig';
@@ -68,19 +67,32 @@ export type AuditEventType =
   | string;
 
 // ── Chain integrity ───────────────────────────────────────────────────────
-function hashEntry(entry: Omit<AuditEntry, 'hash' | 'signature'>): string {
-  const content = JSON.stringify({
+async function digestHex(algorithm: AlgorithmIdentifier, value: string): Promise<string> {
+  const bytes = new TextEncoder().encode(value);
+  const digest = await globalThis.crypto.subtle.digest(algorithm, bytes);
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function entryContent(entry: Omit<AuditEntry, 'hash' | 'signature'>): string {
+  return JSON.stringify({
     id: entry.id, sequence: entry.sequence, timestamp: entry.timestamp,
     eventType: entry.eventType, subject: entry.subject,
     action: entry.action, outcome: entry.outcome, detail: entry.detail,
     prevHash: entry.prevHash,
   });
-  return crypto.createHash('sha256').update(content).digest('hex');
 }
 
-function signEntry(hash: string): string {
+async function hashEntry(entry: Omit<AuditEntry, 'hash' | 'signature'>): Promise<string> {
+  return digestHex('SHA-256', entryContent(entry));
+}
+
+async function signEntry(hash: string): Promise<string> {
   const secret = IS_SERVER ? (process.env.OWNER_SECRET || 'dev-secret') : 'client-na';
-  return crypto.createHmac('sha256', secret).update(hash).digest('hex').slice(0, 16);
+  const key = await globalThis.crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+  );
+  const signature = await globalThis.crypto.subtle.sign('HMAC', key, new TextEncoder().encode(hash));
+  return Array.from(new Uint8Array(signature), byte => byte.toString(16).padStart(2, '0')).join('').slice(0, 16);
 }
 
 // ── In-memory ring buffer (persisted async to Firestore/PostgreSQL) ────────
@@ -121,8 +133,8 @@ class AuditLogImpl {
       prevHash: this.lastHash,
     };
 
-    const hash = hashEntry(partial);
-    const signature = signEntry(hash);
+    const hash = await hashEntry(partial);
+    const signature = await signEntry(hash);
     const entry: AuditEntry = { ...partial, hash, signature };
 
     this.lastHash = hash;
@@ -166,7 +178,7 @@ class AuditLogImpl {
   }
 
   // ── Verify chain integrity ────────────────────────────────────────────
-  verifyChain(limit = 100): { valid: boolean; verified: number; firstBrokenAt?: string } {
+  async verifyChain(limit = 100): Promise<{ valid: boolean; verified: number; firstBrokenAt?: string }> {
     const entries = [...this.buffer].slice(0, limit).reverse(); // oldest first
     let prevHash = '0'.repeat(64);
     let verified = 0;
@@ -179,7 +191,7 @@ class AuditLogImpl {
         });
         return { valid: false, verified, firstBrokenAt: entry.id };
       }
-      const expectedHash = hashEntry({ ...entry, hash: '', signature: '' } as any);
+      const expectedHash = await hashEntry({ ...entry, hash: '', signature: '' } as any);
       if (entry.hash !== expectedHash) {
         log.error('AUDIT ENTRY TAMPERED', undefined, { entryId: entry.id });
         return { valid: false, verified, firstBrokenAt: entry.id };

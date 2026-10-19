@@ -30,17 +30,20 @@ if (NexusEnv.getMode() === 'cloud') {
 export { auth, db, storage, googleProvider };
 
 // Helper for Google Login
+const createStandaloneUser = async () => {
+  const mockUser = {
+    uid: 'local_admin_123',
+    email: 'admin@local.nexus',
+    displayName: 'Local Admin',
+    role: 'admin'
+  };
+  await NexusEnv.save('users', mockUser.uid, mockUser);
+  return mockUser;
+};
+
 export const loginWithGoogle = async () => {
-  if (NexusEnv.getMode() === 'standalone') {
-    // Mock login for standalone mode
-    const mockUser = {
-      uid: 'local_admin_123',
-      email: 'admin@local.nexus',
-      displayName: 'Local Admin',
-      role: 'admin'
-    };
-    await NexusEnv.save('users', mockUser.uid, mockUser);
-    return mockUser;
+  if (NexusEnv.getMode() === 'standalone' || !auth || !googleProvider) {
+    return createStandaloneUser();
   }
   try {
     const result = await signInWithPopup(auth, googleProvider);
@@ -61,7 +64,12 @@ export const loginWithGoogle = async () => {
     }
     
     return user;
-  } catch (error) {
+  } catch (error: any) {
+    if (error?.code === 'auth/unauthorized-domain') {
+      console.warn('Firebase sign-in is unavailable on this preview domain; using standalone mode.');
+      NexusEnv.setMode('standalone');
+      return createStandaloneUser();
+    }
     console.error("Error signing in with Google", error);
     throw error;
   }
