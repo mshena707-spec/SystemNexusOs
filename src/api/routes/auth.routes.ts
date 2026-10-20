@@ -86,28 +86,28 @@ export function createAuthRouter(deps: {
   });
 
   // ── 2FA setup / confirm / verify / disable ─────────────────────────────────
-  router.post('/2fa/setup', authRateLimit, async (req: Request, res: Response) => {
+  router.post('/2fa/setup', requireAuth, authRateLimit, async (req: Request, res: Response) => {
     try {
       const { TOTPService } = await import('../../lib/security/2fa/TOTPService');
       res.json(await TOTPService.generateSecret(req.body.uid, req.body.email));
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
-  router.post('/2fa/confirm', authRateLimit, async (req: Request, res: Response) => {
+  router.post('/2fa/confirm', requireAuth, authRateLimit, async (req: Request, res: Response) => {
     try {
       const { TOTPService } = await import('../../lib/security/2fa/TOTPService');
       res.json(await TOTPService.confirmSetup(req.body.uid, req.body.token));
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
-  router.post('/2fa/verify', authRateLimit, async (req: Request, res: Response) => {
+  router.post('/2fa/verify', requireAuth, authRateLimit, async (req: Request, res: Response) => {
     try {
       const { TOTPService } = await import('../../lib/security/2fa/TOTPService');
       res.json(await TOTPService.verifyToken(req.body.uid, req.body.token));
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
-  router.post('/2fa/disable', authRateLimit, async (req: Request, res: Response) => {
+  router.post('/2fa/disable', requireAuth, authRateLimit, async (req: Request, res: Response) => {
     try {
       const { TOTPService } = await import('../../lib/security/2fa/TOTPService');
       res.json(await TOTPService.disable(req.body.uid, req.body.token));

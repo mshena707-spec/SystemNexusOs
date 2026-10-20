@@ -15,11 +15,11 @@ import { MemoryCaller } from './acl/MemoryACL';
 /** Build MemoryCaller from Express request */
 function callerFromReq(req: any): MemoryCaller {
   return {
-    id: req.user?.uid || req.headers['x-user-id'] || 'anonymous',
-    type: req.user?.isOwner ? 'owner' : req.user?.type || 'user',
-    roles: req.user?.roles || (req.headers['x-admin-token'] ? ['admin'] : []),
-    tenantId: req.headers['x-tenant-id'],
-    isOwner: req.user?.isOwner || false,
+    id: req.authUser?.uid || 'anonymous',
+    type: req.authUser?.role === 'ceo' ? 'owner' : 'user',
+    roles: req.authUser?.role ? [req.authUser.role] : [],
+    tenantId: req.authUser?.tenantId,
+    isOwner: req.authUser?.role === 'ceo',
   };
 }
 
@@ -77,14 +77,14 @@ export function memoryRoutes(app: any, requireAdminAuth: any) {
   });
 
   // ── Episode endpoints ─────────────────────────────────────────────────
-  app.post('/api/memory/episode/create', async (req: any, res: any) => {
+  app.post('/api/memory/episode/create', requireAdminAuth, async (req: any, res: any) => {
     const { sessionId, userId, platform, agentId } = req.body;
     if (!sessionId || !userId) return res.status(400).json({ error: 'sessionId, userId required' });
     const result = await MemoryEngine.createEpisode(sessionId, userId, platform, agentId);
     res.json({ success: true, entry: result });
   });
 
-  app.post('/api/memory/episode/append', async (req: any, res: any) => {
+  app.post('/api/memory/episode/append', requireAdminAuth, async (req: any, res: any) => {
     const { sessionId, entries } = req.body;
     if (!sessionId || !entries?.length) return res.status(400).json({ error: 'sessionId, entries required' });
     const caller = callerFromReq(req);
@@ -92,7 +92,7 @@ export function memoryRoutes(app: any, requireAdminAuth: any) {
     res.json({ success: ok });
   });
 
-  app.get('/api/memory/episode/:sessionId', async (req: any, res: any) => {
+  app.get('/api/memory/episode/:sessionId', requireAdminAuth, async (req: any, res: any) => {
     const caller = callerFromReq(req);
     const result = await MemoryEngine.getEpisode(req.params.sessionId, caller);
     if (!result) return res.status(404).json({ error: 'Episode not found or access denied' });
@@ -113,7 +113,7 @@ export function memoryRoutes(app: any, requireAdminAuth: any) {
     res.json({ success: !!result, entry: result });
   });
 
-  app.post('/api/memory/semantic/search', async (req: any, res: any) => {
+  app.post('/api/memory/semantic/search', requireAdminAuth, async (req: any, res: any) => {
     const { query, collection, topK, threshold } = req.body;
     if (!query) return res.status(400).json({ error: 'query required' });
     const results = await MemoryEngine.semanticSearch(query, { collection, topK, threshold });
@@ -121,7 +121,7 @@ export function memoryRoutes(app: any, requireAdminAuth: any) {
   });
 
   // ── Learning memory endpoints ─────────────────────────────────────────
-  app.post('/api/memory/learning', async (req: any, res: any) => {
+  app.post('/api/memory/learning', requireAdminAuth, async (req: any, res: any) => {
     const { agentId, stimulus, response, feedback, correctedResponse, feedbackSource } = req.body;
     if (!agentId || !stimulus || !response || !feedback) {
       return res.status(400).json({ error: 'agentId, stimulus, response, feedback required' });

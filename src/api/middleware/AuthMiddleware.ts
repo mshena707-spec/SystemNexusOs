@@ -12,12 +12,6 @@ export function requireAdminAuth(req: Request, res: Response, next: NextFunction
   const token = req.headers['authorization']?.replace('Bearer ', '').trim();
   if (!token) { res.status(401).json({ error: 'Unauthorized' }); return; }
 
-  const adminSecret = process.env.OWNER_SECRET;
-  if (adminSecret && token === adminSecret) {
-    (req as any).authUser = { uid: 'owner', role: 'ceo', sessionId: 'legacy-secret', authMethod: 'legacy_secret' };
-    next(); return;
-  }
-
   try {
     const claims = JWTService.verify(token);
     if (!claims || claims.type !== 'access' || (claims.role !== 'admin' && claims.role !== 'ceo')) {

@@ -5,6 +5,7 @@
  */
 
 import { Router, Request, Response } from 'express';
+import { requireAdminAuth, requireAuth } from '../../api/middleware/AuthMiddleware';
 import { BkashAdapter } from './BkashAdapter';
 import { NagadAdapter } from './NagadAdapter';
 import { RocketAdapter } from './RocketAdapter';
@@ -31,7 +32,7 @@ export function mountPaymentRoutes(app: any): void {
   const router = Router();
 
   // ── bKash: initiate ────────────────────────────────────────────────────
-  router.post('/bkash/create', shutdownGuard, async (req: Request, res: Response) => {
+  router.post('/bkash/create', requireAuth, shutdownGuard, async (req: Request, res: Response) => {
     const { orderId, amountBDT } = req.body;
     if (!orderId || !amountBDT) { res.status(400).json({ error: 'orderId and amountBDT required' }); return; }
     const origin = req.headers.origin || process.env.APP_URL || 'http://localhost:3000';
@@ -92,7 +93,7 @@ export function mountPaymentRoutes(app: any): void {
   });
 
   // ── Nagad: initiate ────────────────────────────────────────────────────
-  router.post('/nagad/create', shutdownGuard, async (req: Request, res: Response) => {
+  router.post('/nagad/create', requireAuth, shutdownGuard, async (req: Request, res: Response) => {
     const { orderId, amountBDT } = req.body;
     if (!orderId || !amountBDT) { res.status(400).json({ error: 'orderId and amountBDT required' }); return; }
     const origin = req.headers.origin || process.env.APP_URL || 'http://localhost:3000';
@@ -134,7 +135,7 @@ export function mountPaymentRoutes(app: any): void {
   });
 
   // ── Rocket: initiate ───────────────────────────────────────────────────
-  router.post('/rocket/create', shutdownGuard, async (req: Request, res: Response) => {
+  router.post('/rocket/create', requireAuth, shutdownGuard, async (req: Request, res: Response) => {
     const { orderId, amountBDT } = req.body;
     if (!orderId || !amountBDT) { res.status(400).json({ error: 'orderId and amountBDT required' }); return; }
     const origin = req.headers.origin || process.env.APP_URL || 'http://localhost:3000';
@@ -180,7 +181,7 @@ export function mountPaymentRoutes(app: any): void {
   });
 
   // ── Universal Refund (any provider via RefundEngine) ───────────────────
-  router.post('/refund', async (req: Request, res: Response) => {
+  router.post('/refund', requireAdminAuth, async (req: Request, res: Response) => {
     const { orderId, amount, reason, requestedBy } = req.body;
     if (!orderId || !reason) { res.status(400).json({ error: 'orderId and reason required' }); return; }
     try {
@@ -208,7 +209,7 @@ export function mountPaymentRoutes(app: any): void {
   });
 
   // ── Legacy alias: /stripe/refund -> universal refund ────────────────────
-  router.post('/stripe/refund', async (req: Request, res: Response) => {
+  router.post('/stripe/refund', requireAdminAuth, async (req: Request, res: Response) => {
     const { orderId, amountCents, reason } = req.body;
     if (!orderId) { res.status(400).json({ error: 'orderId required' }); return; }
     try {
@@ -228,7 +229,7 @@ export function mountPaymentRoutes(app: any): void {
   });
 
   // ── Payment audit log for an order ──────────────────────────────────────
-  router.get('/audit/:orderId', async (req: Request, res: Response) => {
+  router.get('/audit/:orderId', requireAdminAuth, async (req: Request, res: Response) => {
     try {
       const { PaymentAuditLog } = await import('./PaymentAuditLog');
       const history = await PaymentAuditLog.getOrderHistory(req.params.orderId);

@@ -25,7 +25,10 @@ import { requireAdminAuth } from '../middleware/AuthMiddleware';
 type H = (req: Request, res: Response) => Promise<void | Response>;
 const wrap = (fn: H) => async (req: Request, res: Response) => {
   try { await fn(req, res); }
-  catch (err: any) { res.status(500).json({ error: err.message ?? 'Internal error' }); }
+  catch (err: any) {
+    console.error('[AdminRoute]', err);
+    res.status(500).json({ error: 'Internal error' });
+  }
 };
 
 export function createAdminRouter(): Router {
@@ -467,7 +470,7 @@ export function createAdminRouter(): Router {
     res.json(data);
   }));
 
-  // ── Coupons ────────────────────────────────────────────────────────────────
+  // ── Coupons ─────────────────────────��──────────────────────────────────────
   router.get('/coupons', wrap(async (_req, res) => {
     const { NexusDB } = await import('../../lib/database/NexusDB');
     res.json(await NexusDB.find('coupons', { limit: 200 }));

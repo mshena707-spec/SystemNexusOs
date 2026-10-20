@@ -29,7 +29,7 @@ const wrap = (fn: H) => async (req: Request, res: Response) => {
 export function createMemoryRouter(): Router {
   const router = Router();
 
-  router.post('/feedback', wrap(async (req, res) => {
+  router.post('/feedback', requireAuth, wrap(async (req, res) => {
     const { NexusDB } = await import('../../lib/database/NexusDB');
     const { memoryId, userId, helpful, comment } = req.body;
     if (!memoryId || !userId) { res.status(400).json({ error: 'memoryId and userId required' }); return; }
@@ -79,7 +79,7 @@ export function createMemoryRouter(): Router {
     res.json(result);
   }));
 
-  router.post('/summarize-session', wrap(async (req, res) => {
+  router.post('/summarize-session', requireAuth, wrap(async (req, res) => {
     const { MemoryCore } = await import('../../lib/core/MemoryCore');
     const userId = req.body.userId;
     const messages: Array<{ role: string; content: string }> = req.body.messages || [];
@@ -102,7 +102,7 @@ export function createMemoryRouter(): Router {
 export function createStoreRouter(): Router {
   const router = Router();
 
-  router.post('/validate-coupon', wrap(async (req, res) => {
+  router.post('/validate-coupon', requireAuth, wrap(async (req, res) => {
     const { CouponEngine } = await import('../../lib/promotions/CouponEngine');
     const { code, customerId, orderSubtotal } = req.body;
     if (!code || !customerId || orderSubtotal === undefined) {
@@ -111,7 +111,7 @@ export function createStoreRouter(): Router {
     res.json(await CouponEngine.validate(code, customerId, Number(orderSubtotal), { ipAddress: req.ip }));
   }));
 
-  router.post('/redeem-coupon', wrap(async (req, res) => {
+  router.post('/redeem-coupon', requireAuth, wrap(async (req, res) => {
     const { CouponEngine } = await import('../../lib/promotions/CouponEngine');
     const { couponId, code, customerId, orderId, discountAmount } = req.body;
     await CouponEngine.redeem(couponId, code, customerId, orderId, discountAmount);
@@ -137,7 +137,7 @@ export function createLoyaltyRouter(): Router {
     res.json(await LoyaltyEngine.getTransactions(req.params.customerId, limit));
   }));
 
-  router.post('/award', wrap(async (req, res) => {
+  router.post('/award', requireAdminAuth, wrap(async (req, res) => {
     const { LoyaltyEngine } = await import('../../lib/loyalty/LoyaltyEngine');
     const { userId, orderId, orderTotal } = req.body;
     if (!userId || !orderId || orderTotal === undefined) {
@@ -146,7 +146,7 @@ export function createLoyaltyRouter(): Router {
     res.json(await LoyaltyEngine.awardForOrder(userId, orderId, Number(orderTotal)));
   }));
 
-  router.post('/redeem', wrap(async (req, res) => {
+  router.post('/redeem', requireAuth, wrap(async (req, res) => {
     const { LoyaltyEngine } = await import('../../lib/loyalty/LoyaltyEngine');
     const { userId, points, orderId } = req.body;
     if (!userId || !points || !orderId) { res.status(400).json({ error: 'userId, points, orderId required' }); return; }
@@ -166,7 +166,7 @@ export function createReferralRouter(): Router {
     res.json(await ReferralEngine.getOrCreateUserCode(req.params.userId));
   }));
 
-  router.post('/process', wrap(async (req, res) => {
+  router.post('/process', requireAuth, wrap(async (req, res) => {
     const { ReferralEngine } = await import('../../lib/growth/ReferralEngine');
     const { referralCode, newUserId } = req.body;
     if (!referralCode || !newUserId) { res.status(400).json({ error: 'referralCode and newUserId required' }); return; }
@@ -186,7 +186,7 @@ export function createReferralRouter(): Router {
 export function createReviewsRouter(): Router {
   const router = Router();
 
-  router.post('/', wrap(async (req, res) => {
+  router.post('/', requireAuth, wrap(async (req, res) => {
     const { ProductReviewEngine } = await import('../../lib/commerce/ProductReviewEngine');
     const id = await ProductReviewEngine.submitReview(req.body);
     res.status(201).json({ id });
